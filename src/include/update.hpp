@@ -20,6 +20,7 @@
 #include <vector>
 #include <cctype>
 #include <algorithm>
+#include <cstdlib>
 
 #include "utils/utils.hpp"
 
@@ -56,6 +57,17 @@ static int compare_semver(std::string a, std::string b) {
 }
 
 static bool g_vercheck_warned_timeout = false;
+
+static bool version_check_disabled() {
+    const char* env = std::getenv("FLM_DISABLE_UPDATE_CHECK");
+    if (!env) return false;
+
+    std::string value(env);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
 
 #ifdef _WIN32
 
@@ -202,6 +214,8 @@ static std::optional<std::string> http_get_latest_tag_from_github(bool& timed_ou
 
 
 static void check_and_notify_new_version() {
+    if (version_check_disabled()) return;
+
     bool timed_out = false;
     auto latest_opt = http_get_latest_tag_from_github(timed_out);
 
@@ -274,6 +288,8 @@ static std::optional<std::string> http_get_latest_tag_from_github(bool& timed_ou
 }
 
 static void check_and_notify_new_version() {
+    if (version_check_disabled()) return;
+
     bool timed_out = false;
     auto latest_opt = http_get_latest_tag_from_github(timed_out);
 
@@ -292,4 +308,3 @@ static void check_and_notify_new_version() {
     }
 }
 #endif
-

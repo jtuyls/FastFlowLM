@@ -56,6 +56,7 @@ flm run llama3.2:1b
 >   - **Linux**: `~/.config/flm/`
 > - During installation on Windows, you can select a different base folder (e.g., if you choose `C:\Users\<USER>\flm`, models will be saved under `C:\Users\<USER>\flm\models\`).
 > - On Linux, you can override the default location by setting the `FLM_MODEL_PATH` environment variable.
+> - To disable the startup version check, set `FLM_DISABLE_UPDATE_CHECK=1`.
 > - ⚠️ If HuggingFace is not accessible in your region, manually download the model ([check this issue](https://github.com/FastFlowLM/FastFlowLM/issues/2)) and place it in the chosen directory.   
 
 🎉🚀 FastFlowLM (FLM) is ready — your NPU is unlocked and you can start chatting with models right away!
@@ -190,4 +191,3 @@ More details on the exact procedure, with dependencies to be installed, for linu
         ```bash
         cmake --install build
         ```
-
