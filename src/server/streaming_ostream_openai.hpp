@@ -433,6 +433,9 @@ private:
                     }
                 })}
             };
+            header_print("FLM", "Tool name: " + result.tool_name);
+            header_print("FLM", "Tool args: " + result.tool_args_str);
+            header_print("FLM", "Tool JSON: " + delta["tool_calls"][0]["function"].dump());
         }
         else if (result.type == StreamEventType::REASONING) {
             delta = {

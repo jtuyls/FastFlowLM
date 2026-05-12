@@ -562,8 +562,8 @@ StreamResult LFM2_5_TK::parse_stream_content(const std::string content) {
 
                 result.type = StreamEventType::TOOL_DONE;
                 result.tool_id = "call_" + std::to_string(std::time(nullptr));
-                result.tool_name = fn_name;
-                result.tool_args_str = args_json.dump();
+                result.tool_name = sanitize_tool_argument_json_strings(fn_name);
+                result.tool_args_str = sanitize_tool_argument_json_strings(args_json.dump());
 
                 return result;
 

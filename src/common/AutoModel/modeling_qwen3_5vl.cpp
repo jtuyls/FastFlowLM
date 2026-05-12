@@ -335,7 +335,7 @@ StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
                         func_start += func_open.length();
                         size_t func_end = block.find(">", func_start);
                         if (func_end != std::string::npos) {
-                            result.tool_name = block.substr(func_start, func_end - func_start);
+                            result.tool_name = sanitize_tool_argument_json_strings(block.substr(func_start, func_end - func_start));
                         }
                     }
 
@@ -377,7 +377,7 @@ StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
                         search_pos = val_end + param_close.length();
                     }
 
-                    result.tool_args_str = args.dump();
+                    result.tool_args_str = sanitize_tool_argument_json_strings(args.dump());
                     return result;
                 }
                 catch (...) {

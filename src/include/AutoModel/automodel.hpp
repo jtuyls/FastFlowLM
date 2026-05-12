@@ -35,6 +35,7 @@
 #include "modules/sampler.hpp"
 #include "utils/utils.hpp"
 #include "utils/profiler.hpp"
+#include "utils/json_check.hpp"
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "npu_utils/npu_utils.hpp"
 #include "minja/chat-template.hpp"

@@ -112,6 +112,13 @@ void brief_print_message_request(nlohmann::json request) {
         }
     }
 
+    // TODO: improve tools logging like only print the tool name and elide the arguments, or print the arguments in a brief way if they are too long
+    bool tools_elided = false;
+    if (request.contains("tools")) {
+        request["tools"] = "[...]";
+        tools_elided = true;
+    }
+
     if (request.contains("message")){
         std::string content = request["message"]["content"].get<std::string>();
         if (content.size() > 20) {
@@ -119,7 +126,16 @@ void brief_print_message_request(nlohmann::json request) {
         }
     }
     header_print("LOG", "Body: ");
-    std::cout << request.dump(4) << std::endl;
+    std::string brief_body = request.dump(4);
+    if (tools_elided) {
+        const std::string quoted_tools = "\"tools\": \"[...]\"";
+        const std::string compact_tools = "\"tools\": [...]";
+        size_t pos = brief_body.find(quoted_tools);
+        if (pos != std::string::npos) {
+            brief_body.replace(pos, quoted_tools.size(), compact_tools);
+        }
+    }
+    std::cout << brief_body << std::endl;
 
 }
 
