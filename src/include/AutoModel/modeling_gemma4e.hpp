@@ -74,6 +74,8 @@ private:
         int pooling_kernel_size
     );
 
+    StreamResult parse_stream_content_impl(const std::string content, bool is_final);
+
 
 
 
@@ -87,6 +89,7 @@ public:
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
     NonStreamResult parse_nstream_content(const std::string response_text);
     StreamResult parse_stream_content(const std::string content);
+    StreamResult parse_stream_content_final(const std::string content) override;
     chat_template_type_t get_chat_template_type() {
         return chat_template_type_t::gemma4;
     }
