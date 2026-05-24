@@ -132,8 +132,8 @@ public:
     int get_current_context_length() override;
 
 
-    int checkpoint();
-    int restore();
+    int checkpoint() override;
+    int restore() override;
 
     // parameters for vision preprocessing in Gemma4e
     unsigned int GEMMA4E_VISION_MAX_POSITION_EMBEDDINGS;

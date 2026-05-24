@@ -66,6 +66,8 @@ public:
     /// \return the current context length
     int get_current_context_length() override;
 
+    int checkpoint() override;
+    int restore() override;
 private:
     struct Impl;
     Impl* _impl;

@@ -57,4 +57,8 @@ public:
     /// \brief get the current context length
     /// \return the current context length
     virtual int get_current_context_length() = 0;
+
+    virtual int checkpoint() = 0;
+
+    virtual int restore() = 0;
 };
