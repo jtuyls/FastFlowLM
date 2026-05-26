@@ -24,8 +24,7 @@
                     "quantization_level": "Q4_1"
                 },
                 "label":[
-                    "reasoning",
-                    "tool-calling"
+                    "reasoning"
                 ],
                 "footprint": 3.1
             }
