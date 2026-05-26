@@ -598,8 +598,8 @@
         "medgemma1.5": {
             "4b": {
                 "name": "Medgemma-1.5-4B-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/medgemma-1.5-4b-it-NPU2/resolve/main",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/medgemma-1.5-4b-it-NPU2/tree/main",
+                "url": "https://huggingface.co/FastFlowLM/medgemma-1.5-4b-it-NPU2/resolve/test_new_template",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/medgemma-1.5-4b-it-NPU2/tree/test_new_template",
                 "modified_at": "2025-05-30T00:00:00Z",
                 "size": 4000000000,
                 "default_context_length": 65536,
