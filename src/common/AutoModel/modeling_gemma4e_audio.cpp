@@ -142,7 +142,7 @@ void Gemma4e::extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma
     // Then multiply by window: frames[n] = waveform_frame[n] * window[n]
     //
     // Fused unfold + drop-last + window multiply (AVX512 when available).
-    std::vector<float> windowed_frames(num_frames_out * frame_length);
+    std::vector<float> windowed_frames(static_cast<size_t>(num_frames_out) * frame_length);
     audioproc::apply_window_frames_optimized(
         waveform.data(),
         window.data(),
@@ -154,7 +154,7 @@ void Gemma4e::extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma
     // ------- stft = np.fft.rfft(frames, n=fft_length, axis=-1) -------
     // ------- magnitude_spec = np.abs(stft)                     -------
     // rfft_magnitude_batch does both: rfft + abs
-    std::vector<float> magnitude_spec(num_frames_out * num_frequency_bins);
+    std::vector<float> magnitude_spec(static_cast<size_t>(num_frames_out) * num_frequency_bins);
     audioproc::rfft_magnitude_batch_optimized(
         windowed_frames.data(),
         magnitude_spec.data(),
@@ -166,7 +166,7 @@ void Gemma4e::extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma
     // magnitude_spec: [num_frames_out x num_frequency_bins]
     // mel_filters:    [num_frequency_bins x feature_size]
     // out:            [num_frames_out x feature_size]
-    std::vector<float> mel_spec(num_frames_out * feature_size);
+    std::vector<float> mel_spec(static_cast<size_t>(num_frames_out) * feature_size);
     audioproc::mel_spectrogram_optimized(
         magnitude_spec.data(),
         mel_filters.data(),
@@ -176,20 +176,20 @@ void Gemma4e::extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma
         feature_size);
 
     // ------- log_mel_spec = np.log(mel_spec + self.mel_floor) -------
-    std::vector<float> log_mel_spec(num_frames_out * feature_size);
+    std::vector<float> log_mel_spec(static_cast<size_t>(num_frames_out) * feature_size);
     audioproc::log_mel_floor_optimized(
         mel_spec.data(),
         log_mel_spec.data(),
-        num_frames_out * feature_size,
+        static_cast<size_t>(num_frames_out) * feature_size,
         mel_floor);
 
     // ------- per_bin_mean / per_bin_stddev normalization (skipped if None) -------
     // per_bin_mean and per_bin_stddev are None by default, skip for now.
 
     // ------- Store results into audio_payload (float -> bf16) -------
-    const int total_bins = num_frames_out * feature_size;
+    const size_t total_bins = static_cast<size_t>(num_frames_out) * feature_size;
     std::vector<bf16> log_mel_spec_bf16(total_bins);
-    for (int i = 0; i < total_bins; i++) {
+    for (size_t i = 0; i < total_bins; i++) {
         log_mel_spec_bf16[i] = static_cast<bf16>(log_mel_spec[i]);
     }
     audio_payload.mel_spectrograms[audio_idx] = std::move(log_mel_spec_bf16);

@@ -123,8 +123,8 @@ std::vector<uint8_t> Gemma4e::aspect_ratio_preserving_resize(
         image.width_resized = target_width;
         image.height_resized = target_height;
 
-        std::vector<uint8_t> result(channels * height * width);
-        memcpy(result.data(), image._data.data(), channels * height * width);
+        std::vector<uint8_t> result(static_cast<size_t>(channels) * height * width);
+        memcpy(result.data(), image._data.data(), static_cast<size_t>(channels) * height * width);
 
         image._data.free();
         return result;
@@ -187,8 +187,8 @@ void Gemma4e::preprocess_image(
     );
 
     // step 2, rescale and normaliuze
-    std::vector<float> rescaled_and_normalized_bufer(  
-        image.width_resized * image.height_resized * 3
+    std::vector<float> rescaled_and_normalized_bufer(
+        static_cast<size_t>(image.width_resized) * image.height_resized * 3
     );
 
 
@@ -207,7 +207,7 @@ void Gemma4e::preprocess_image(
     int num_channels = 3;
     int elements_per_patch = patch_size * patch_size * num_channels;
 
-    std::vector<float> patches(num_patches * elements_per_patch);
+    std::vector<float> patches(static_cast<size_t>(num_patches) * elements_per_patch);
 
     {
         // the convert_image_to_parchtes operation in python
@@ -240,7 +240,7 @@ void Gemma4e::preprocess_image(
 
     // now. step 5
   
-    image_grid_pairs.resize(num_patches * 2);
+    image_grid_pairs.resize(static_cast<size_t>(num_patches) * 2);
     for (int ph = 0; ph < patch_height; ++ph) {
         for (int pw = 0; pw < patch_width; ++pw) {
             int patch_idx = ph * patch_width + pw;
@@ -253,8 +253,8 @@ void Gemma4e::preprocess_image(
     // Step 6. Pad patches and positions to `max_patches`
     int padding_length = max_patches - num_patches;
     if (padding_length > 0) {
-        patches.resize(max_patches * elements_per_patch, 0.0f);
-        image_grid_pairs.resize(max_patches * 2, -1);
+        patches.resize(static_cast<size_t>(max_patches) * elements_per_patch, 0.0f);
+        image_grid_pairs.resize(static_cast<size_t>(max_patches) * 2, -1);
     }
 
 

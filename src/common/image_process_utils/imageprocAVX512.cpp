@@ -17,7 +17,7 @@ namespace avx512 {
             return resize_bicubic_plane(src, src_w, src_h, dst_w, dst_h, antialias);
         }
 
-        std::vector<float> dst(dst_w * dst_h);
+        std::vector<float> dst(static_cast<size_t>(dst_w) * dst_h);
         
         // PyTorch's exact scale calculation (align_corners=False for resize)
         const float scale_w = area_pixel_compute_scale(src_w, dst_w, false);
