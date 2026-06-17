@@ -19,7 +19,7 @@ mkdir -p "$OUT"
 HRX_DIR="${HRX_DIR:-}"
 HRX_BUILD="${HRX_BUILD:-}"
 if [[ -z "$HRX_DIR" ]]; then
-  for c in "$HOME/workspace/iree-ai/hrx" "$HOME/hrx" "../hrx" "../../hrx"; do
+  for c in "$HOME/hrx" "../hrx" "../../hrx" "../../../hrx"; do
     [[ -f "$c/libhrx/include/hrx_runtime.h" ]] && HRX_DIR="$(cd "$c" && pwd)" && break
   done
 fi

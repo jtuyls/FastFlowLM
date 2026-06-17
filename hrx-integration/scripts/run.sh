@@ -28,7 +28,8 @@ FLM_BUILD_DIR="$(cd "$(dirname "$FLM_BIN")" && pwd)"
 # --- locate libhrx.so ---
 HRX_BUILD="${HRX_BUILD:-}"
 if [[ -z "$HRX_BUILD" ]]; then
-  for c in "$HOME/workspace/iree-ai/hrx/build-amdxdna-native" "$HOME/hrx/build-amdxdna-native"; do
+  for c in "$HOME/hrx/build-amdxdna-native" "$HERE/../../../hrx/build-amdxdna-native" \
+           "$HERE/../../hrx/build-amdxdna-native"; do
     [[ -f "$c/libhrx/src/libhrx/libhrx.so" ]] && HRX_BUILD="$c" && break
   done
 fi
@@ -53,7 +54,9 @@ fi
 SHIM_DIR="$(cd "$(dirname "$SHIM")" && pwd)"
 export LD_LIBRARY_PATH="$SHIM_DIR:$LIBHRX_DIR:/opt/xilinx/xrt/lib:${LD_LIBRARY_PATH:-}"
 export FLM_FORWARD="${FLM_FORWARD:-1}"
+# Command chaining (each runlist batched into one HRX ERT_CMD_CHAIN) is ON by
+# default in the shim; set FLM_CHAIN=0 to fall back to per-dispatch.
 
-echo "[run] shim=$SHIM_DIR  libhrx=$LIBHRX_DIR  FLM_FORWARD=$FLM_FORWARD"
+echo "[run] shim=$SHIM_DIR  libhrx=$LIBHRX_DIR  FLM_FORWARD=$FLM_FORWARD  FLM_CHAIN=${FLM_CHAIN:-on}"
 echo "[run] $FLM_BIN $*"
 exec "$FLM_BIN" "$@"

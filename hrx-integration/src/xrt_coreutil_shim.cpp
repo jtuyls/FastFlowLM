@@ -78,9 +78,11 @@ struct BoImpl {
     uint64_t id = 0;
     hrx_buffer_t hbuf = nullptr;  // forward-mode device buffer
     void* mapped = nullptr;       // unused (legacy)
-    // forward-mode dirty tracking: host data needs upload to device. Starts true
-    // (first use uploads); set true again when the engine writes (sync TO_DEVICE).
+    // forward-mode dirty tracking:
+    //  host_dirty: host data not yet on device (needs h2d before dispatch).
+    //  dev_dirty:  device data not yet on host (needs d2h before host read).
     bool host_dirty = true;
+    bool dev_dirty = false;
 };
 struct Binding {
     int index = 0;
@@ -253,9 +255,21 @@ public:
     hrx_stream_t stream = nullptr;
     std::mutex mu;
     std::unordered_map<size_t, hrx_executable_t> exe_cache;  // control-hash -> exe
+    std::vector<BoImpl*> pending_out;  // outputs written by un-flushed dispatches
     std::atomic<uint64_t> dispatched{0}, skipped{0}, exe_fail{0};
     std::atomic<uint64_t> alloc_ok{0}, alloc_fail{0};
     std::atomic<uint64_t> sync_to{0}, sync_from{0}, h2d_copies{0}, h2d_skips{0};
+    // grouping instrumentation
+    std::atomic<uint64_t> n_run_start{0}, n_runlist_exec{0}, n_runlist_runs{0};
+    std::atomic<uint64_t> n_run_wait{0}, n_runlist_wait{0}, max_runlist{0};
+    // timing (microseconds) to see where decode time goes
+    std::atomic<uint64_t> t_h2d{0}, t_disp{0}, t_sync{0}, t_d2h{0};
+    std::atomic<uint64_t> t_h2d_bytes{0}, t_d2h_bytes{0};
+    // per-dispatch time split by xclbin-change (context switch) vs same context
+    XclbinImpl* last_xclbin_disp = nullptr;
+    std::atomic<uint64_t> t_same{0}, n_same{0}, t_switch{0}, n_switch{0};
+    // chained-path (forward_runlist): #chains formed, #dispatches chained
+    std::atomic<uint64_t> n_chain{0}, n_chain_disp{0};
 
     static void print_stats() {
         auto& f = get();
@@ -267,10 +281,39 @@ public:
                      (unsigned long long)f.exe_fail, (unsigned long long)f.alloc_ok,
                      (unsigned long long)f.sync_to, (unsigned long long)f.sync_from,
                      (unsigned long long)f.h2d_copies, (unsigned long long)f.h2d_skips);
+        std::fprintf(stderr,
+                     "[fwd] group: run_start=%llu runlist_exec=%llu "
+                     "runlist_runs=%llu (max=%llu) run_wait=%llu runlist_wait=%llu\n",
+                     (unsigned long long)f.n_run_start,
+                     (unsigned long long)f.n_runlist_exec,
+                     (unsigned long long)f.n_runlist_runs,
+                     (unsigned long long)f.max_runlist,
+                     (unsigned long long)f.n_run_wait,
+                     (unsigned long long)f.n_runlist_wait);
+        std::fprintf(stderr,
+                     "[fwd] time(ms): h2d=%llu (%lluMB) dispatch+sync=%llu "
+                     "d2h=%llu (%lluMB) h2d_pre_sync=%llu\n",
+                     (unsigned long long)f.t_h2d / 1000,
+                     (unsigned long long)f.t_h2d_bytes / (1024 * 1024),
+                     (unsigned long long)f.t_disp / 1000,
+                     (unsigned long long)f.t_d2h / 1000,
+                     (unsigned long long)f.t_d2h_bytes / (1024 * 1024),
+                     (unsigned long long)f.t_sync / 1000);
+        std::fprintf(stderr,
+                     "[fwd] runlists: single-ctx=%llu multi-ctx=%llu  "
+                     "intra-runlist ctx-switches=%llu over %llu runs\n",
+                     (unsigned long long)f.n_same, (unsigned long long)f.n_switch,
+                     (unsigned long long)f.t_switch, (unsigned long long)f.t_same);
+        std::fprintf(stderr, "[fwd] chaining: chains=%llu chained_dispatches=%llu\n",
+                     (unsigned long long)f.n_chain,
+                     (unsigned long long)f.n_chain_disp);
     }
 
+    bool chain = true;  // batch runlists into one ERT_CMD_CHAIN (FLM_CHAIN=0 off)
     Forwarder() {
         enabled = std::getenv("FLM_FORWARD") != nullptr;
+        const char* c = std::getenv("FLM_CHAIN");
+        chain = !c || c[0] != '0';  // chaining ON by default; FLM_CHAIN=0 disables
         if (enabled) std::atexit(&Forwarder::print_stats);
     }
 
@@ -335,13 +378,14 @@ public:
     }
 };
 
-// Dispatch one captured run through HRX. Bindings = the run's bo args in order
-// (arg3, arg4, ...); arg3 is the output (written), later args are inputs.
+// Dispatch one captured run through HRX (per-dispatch synchronous path): h2d
+// dirty inputs, dispatch, synchronize, then read the output back via map() (a
+// cheap host-cache invalidate, NOT a per-buffer queue submit). Used for
+// xrt::run::start singles; runlists go through forward_runlist (chaining, on by
+// default unless FLM_CHAIN=0). Dirty tracking skips static-weight re-uploads.
 static void forward_dispatch(RunImpl* r) {
     auto& fwd = Forwarder::get();
     if (!fwd.enabled || !r || !r->kernel) return;
-    static std::atomic<uint64_t> attempts{0};
-    if ((++attempts % 2000) == 0) Forwarder::print_stats();
     auto k = r->kernel;
     if (!k->xclbin || !k->module || !k->module->elf) return;
     std::lock_guard<std::mutex> lk(fwd.mu);
@@ -351,26 +395,21 @@ static void forward_dispatch(RunImpl* r) {
         fwd.executable_for(k->xclbin->bytes, k->module->elf->bytes, &patch);
     if (!exe) { fwd.exe_fail++; return; }
     std::vector<hrx_buffer_ref_t> binds;
-    std::vector<const Binding*> bos;
-    for (const auto& a : r->args) {  // already in set_arg index order
+    BoImpl* out = nullptr;
+    for (auto& a : r->args) {
         if (!a.is_bo) continue;
         if (!a.hbuf || !a.host) { fwd.skipped++; return; }
+        if (!out) out = a.bi;  // binding 0 = arg3 = output
+        // h2d only dirty inputs (static weights upload once via sync tracking).
+        if (a.bi && !a.bi->host_dirty) { fwd.h2d_skips++; }
+        else {
+            hrx_stream_copy_h2d(fwd.stream, a.host, a.hbuf, 0, a.size);
+            if (a.bi) a.bi->host_dirty = false;
+            fwd.h2d_copies++;
+        }
         binds.push_back({a.hbuf, 0, a.size});
-        bos.push_back(&a);
     }
     if (binds.empty()) { fwd.skipped++; return; }
-    // h2d: only upload bindings whose host data changed since last upload
-    // (static weights upload once; activations re-upload when the engine
-    // re-syncs them). Persistent device residency = the big perf win.
-    bool any = false;
-    for (auto* a : bos) {
-        if (a->bi && !a->bi->host_dirty) { fwd.h2d_skips++; continue; }
-        hrx_stream_copy_h2d(fwd.stream, a->host, a->hbuf, 0, a->size);
-        if (a->bi) a->bi->host_dirty = false;
-        fwd.h2d_copies++;
-        any = true;
-    }
-    if (any) hrx_stream_synchronize(fwd.stream);
     uint32_t ord = 0;
     hrx_executable_lookup_export_by_name(exe, "MLIR_AIE", &ord);
     hrx_dispatch_config_t cfg = {{1, 1, 1}, {1, 1, 1}, 0};
@@ -379,16 +418,118 @@ static void forward_dispatch(RunImpl* r) {
                                          HRX_DISPATCH_FLAG_NONE);
     if (hrx_status_is_ok(s)) {
         hrx_stream_synchronize(fwd.stream);
-        // d2h only the output (binding 0 = arg3 by FLM convention); inputs are
-        // unchanged on device. Output's host now matches device.
-        if (!bos.empty()) {
-            hrx_stream_copy_d2h(fwd.stream, bos[0]->hbuf, 0, bos[0]->host,
-                                bos[0]->size);
-            hrx_stream_synchronize(fwd.stream);
-            if (bos[0]->bi) bos[0]->bi->host_dirty = false;
+        // read the output back via map() (cheap host-cache invalidate, no submit).
+        if (out && out->hbuf) {
+            void* p = nullptr;
+            if (hrx_status_is_ok(hrx_buffer_map(out->hbuf, HRX_MAP_READ, 0,
+                                                out->size, &p)) && p) {
+                std::memcpy(out->data.data(), p, out->size);
+                hrx_buffer_unmap(out->hbuf);
+            }
+            out->host_dirty = false;
         }
     }
     if ((++fwd.dispatched % 20000) == 0) Forwarder::print_stats();
+}
+
+// Chained runlist (default; FLM_CHAIN=0 disables): batch a whole runlist into
+// one HRX ERT_CMD_CHAIN instead of one synchronous dispatch per run. Four phases:
+//   1. h2d for all dirty inputs,
+//   2. record every dispatch (no sync) so HRX coalesces them into one chain,
+//   3. ONE synchronize runs the whole chain,
+//   4. map()-readback the outputs.
+// This amortizes per-dispatch submit/completion overhead across the runlist.
+// Requires the HRX amdxdna command-chain support (ROCm/hrx-system#37).
+// One-shot capture of a real runlist to $FLM_DUMP_RUNLIST_DIR (default
+// /tmp/flm_runlist) when FLM_DUMP_RUNLIST=<min-runs> is set: writes xclbin.bin,
+// each run's control ELF (run_NN.elf) and a manifest.txt of binding sizes:ids
+// (ids reveal buffers shared across runs). Feeds the standalone HRX microbench
+// in bench/ (flm_hrx_runlist_bench.cpp). Off unless FLM_DUMP_RUNLIST is set.
+static void maybe_capture_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
+    static const char* min_env = std::getenv("FLM_DUMP_RUNLIST");
+    if (!min_env) return;
+    static bool dumped = false;
+    if (dumped || (int)runs.size() < std::atoi(min_env)) return;
+    dumped = true;
+    const char* d = std::getenv("FLM_DUMP_RUNLIST_DIR");
+    std::string dir = d ? d : "/tmp/flm_runlist";
+    (void)system(("mkdir -p '" + dir + "'").c_str());
+    std::ofstream man(dir + "/manifest.txt");
+    man << "nruns " << runs.size() << "\n";
+    bool wrote_xclbin = false;
+    int ri = 0;
+    for (auto& rp : runs) {
+        RunImpl* r = rp.get();
+        if (r && r->kernel) {
+            auto k = r->kernel;
+            if (!wrote_xclbin && k->xclbin) {
+                std::ofstream xf(dir + "/xclbin.bin", std::ios::binary);
+                xf.write((const char*)k->xclbin->bytes.data(), k->xclbin->bytes.size());
+                wrote_xclbin = true;
+            }
+            if (k->module && k->module->elf) {
+                char fn[64]; std::snprintf(fn, sizeof(fn), "/run_%02d.elf", ri);
+                std::ofstream ef(dir + fn, std::ios::binary);
+                ef.write((const char*)k->module->elf->bytes.data(), k->module->elf->bytes.size());
+            }
+            man << "run " << ri << " bindings";
+            for (auto& a : r->args)
+                if (a.is_bo) man << " " << a.size << ":" << (a.bi ? a.bi->id : 0);
+            man << "\n";
+        }
+        ri++;
+    }
+    std::fprintf(stderr, "[capture] wrote %zu-run runlist to %s\n", runs.size(), dir.c_str());
+}
+
+static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
+    auto& fwd = Forwarder::get();
+    if (!fwd.enabled || !fwd.dev) return;
+    std::lock_guard<std::mutex> lk(fwd.mu);
+    maybe_capture_runlist(runs);
+    // phase 1: DMA h2d for all dirty inputs
+    for (auto& rp : runs) {
+        RunImpl* r = rp.get(); if (!r || !r->kernel) continue;
+        for (auto& a : r->args) {
+            if (!a.is_bo || !a.hbuf || !a.host) continue;
+            if (a.bi && !a.bi->host_dirty) { fwd.h2d_skips++; continue; }
+            hrx_stream_copy_h2d(fwd.stream, a.host, a.hbuf, 0, a.size);
+            fwd.t_h2d_bytes += a.size;
+            if (a.bi) a.bi->host_dirty = false; fwd.h2d_copies++;
+        }
+    }
+    // phase 2: record every dispatch (no sync -> HRX coalesces into one chain)
+    std::vector<BoImpl*> outs; int n = 0;
+    for (auto& rp : runs) {
+        RunImpl* r = rp.get(); if (!r || !r->kernel) continue;
+        auto k = r->kernel; if (!k->xclbin || !k->module || !k->module->elf) continue;
+        std::vector<uint32_t> patch;
+        hrx_executable_t exe = fwd.executable_for(k->xclbin->bytes, k->module->elf->bytes, &patch);
+        if (!exe) { fwd.exe_fail++; continue; }
+        std::vector<hrx_buffer_ref_t> binds; BoImpl* out = nullptr;
+        for (const auto& a : r->args) { if (!a.is_bo) continue; if (!a.hbuf) { out=nullptr; break; }
+            if (!out) out = a.bi; binds.push_back({a.hbuf, 0, a.size}); }
+        if (binds.empty()) continue;
+        uint32_t ord = 0; hrx_executable_lookup_export_by_name(exe, "MLIR_AIE", &ord);
+        hrx_dispatch_config_t cfg = {{1,1,1},{1,1,1},0};
+        if (hrx_status_is_ok(hrx_stream_dispatch(fwd.stream, exe, ord, &cfg, nullptr, 0,
+                                                 binds.data(), binds.size(), HRX_DISPATCH_FLAG_NONE))) {
+            if (out) outs.push_back(out); n++;
+        }
+    }
+    fwd.dispatched += n; fwd.n_chain++; fwd.n_chain_disp += n;
+    // phase 3: ONE synchronize runs the whole chain
+    hrx_stream_synchronize(fwd.stream);
+    // phase 4: map()-readback outputs (cheap host-cache invalidate, no submit)
+    for (BoImpl* b : outs) {
+        if (!b || !b->hbuf) continue;
+        void* p = nullptr;
+        if (hrx_status_is_ok(hrx_buffer_map(b->hbuf, HRX_MAP_READ, 0, b->size, &p)) && p) {
+            std::memcpy(b->data.data(), p, b->size); hrx_buffer_unmap(b->hbuf);
+            fwd.t_d2h_bytes += b->size;
+        }
+        b->host_dirty = false;
+    }
 }
 
 }  // namespace cap
@@ -626,6 +767,7 @@ ext::kernel::kernel(const hw_context& ctx, const module& mod,
 bo::~bo() = default;
 void* bo::map() {
     if (!handle) return nullptr;
+    auto b = as<BoImpl>(handle);
     return as<BoImpl>(handle)->data.data();  // host staging
 }
 size_t bo::size() const {
@@ -699,10 +841,11 @@ void run::set_arg_at_index(int index, const bo& boh) {
 }
 void run::start() {
     RunImpl* r = as<RunImpl>(handle);
-    if (Forwarder::get().enabled) forward_dispatch(r);
+    if (Forwarder::get().enabled) { Forwarder::get().n_run_start++; forward_dispatch(r); }
     else Registry::get().capture(r);
 }
 ert_cmd_state run::wait(const std::chrono::milliseconds&) const {
+    if (Forwarder::get().enabled) { Forwarder::get().n_run_wait++; }
     return ERT_CMD_STATE_COMPLETED;
 }
 
@@ -720,13 +863,24 @@ void runlist::add(run&& r) {
         std::static_pointer_cast<RunImpl>(r.handle));
 }
 void runlist::execute() {
-    bool fwd = Forwarder::get().enabled;
-    for (auto& r : as<RunlistImpl>(handle)->runs) {
+    auto& F = Forwarder::get();
+    bool fwd = F.enabled;
+    auto& runs = as<RunlistImpl>(handle)->runs;
+    if (fwd) {
+        F.n_runlist_exec++;
+        F.n_runlist_runs += runs.size();
+        uint64_t cur = F.max_runlist.load();
+        while (runs.size() > cur && !F.max_runlist.compare_exchange_weak(cur, runs.size())) {}
+    }
+    if (fwd && F.chain) { forward_runlist(runs); return; }
+    for (auto& r : runs) {
         if (fwd) forward_dispatch(r.get());
         else Registry::get().capture(r.get());
     }
 }
 void runlist::reset() { as<RunlistImpl>(handle)->runs.clear(); }
-void runlist::wait(const std::chrono::milliseconds&) const {}
+void runlist::wait(const std::chrono::milliseconds&) const {
+    if (Forwarder::get().enabled) { Forwarder::get().n_runlist_wait++; }
+}
 
 }  // namespace xrt

@@ -156,20 +156,33 @@ model list, and the xclbins; it symlinks `<flm-dir>/xclbins -> ../xclbins`, sets
 
 ## 6. Measured performance
 
-AMD Ryzen AI 9 365 (Strix Point), Qwen3-0.6B, via this interposer → HRX, vs
-FastFlowLM's published **native XRT** figures (measured on Ryzen AI 7 350 /
-Kraken Point — different hardware, so indicative only):
+AMD Ryzen AI 9 365 (Strix Point), Qwen3-0.6B, via this interposer → HRX (`flm
+bench`, command chaining on), vs FastFlowLM's published **native XRT** figures
+(measured on Ryzen AI 7 350 / Kraken Point — different hardware, so indicative
+only):
 
 | Context | Decode (HRX) | Decode (native adv.) | Prefill (HRX) | Prefill (native adv.) |
 |--------:|-------------:|---------------------:|--------------:|----------------------:|
-| 1k      | 39.6 tok/s   | 66.5                 | 810 tok/s     | 1494                  |
-| 4k      | 30.2         | 44.5                 | 1381          | 2165                  |
-| 16k     | 15.0         | 19.6                 | 1154          | 1485                  |
-| 32k     | 9.4          | 14.1                 | 773           | 907                   |
+| 1k      | 45.1 tok/s   | 66.5                 | 752 tok/s     | 1494                  |
+| 4k      | 33.0         | 44.5                 | 1406          | 2165                  |
+| 16k     | 16.8         | 19.6                 | 1170          | 1485                  |
+| 32k     | 10.0         | 14.1                 | 768           | 907                   |
 
-≈ 55–77% of native throughput through a fully transparent interposer. The gap is
-dominated by **per-dispatch synchronization** (each kernel is its own HRX
-dispatch + h2d/d2h sync). Batching into HRX command chains is the main lever.
+The native columns were measured on **different hardware** (Kraken Point), and
+**native XRT cannot run on this machine at all** (no XRT XDNA driver plugin is
+installed — only emulation shims), which is the whole reason this HRX interposer
+exists. So the absolute gap is *not* directly attributable from here.
+
+### Command chaining (on by default)
+
+Each FLM runlist is batched into one HRX `ERT_CMD_CHAIN` (`forward_runlist`)
+instead of one synchronous dispatch per kernel, amortizing per-dispatch
+submit/completion overhead (the numbers above). Set `FLM_CHAIN=0` to fall back
+to one synchronous dispatch per kernel.
+
+Requires the HRX `amdxdna` command-chain support in [ROCm/hrx-system#37].
+`bench/` is a standalone, HRX-only microbenchmark of the chain path (chain vs
+separate dispatch over one captured runlist).
 
 ---
 
@@ -189,11 +202,13 @@ byte counts; `FLM_FORWARD=0` disables forwarding entirely.
 
 ## 8. Limitations
 
-- One HRX dispatch per FLM kernel with a full sync — correct but not yet
-  throughput-optimal.
+- Runlists are batched into HRX command chains (§6, on by default); single
+  `xrt::run::start` dispatches still take the per-dispatch synchronous path.
 - Verified with `qwen3:0.6b`; other models share the kernel ABI and should work
   but are unverified here.
 - The shim assumes FLM's `arg3` is the kernel output (true for the Qwen3
   kernels). The `xrt::uuid` ABI is opaque, so xclbin↔context association uses
   construction order (the engine builds each xclbin immediately before its
   `hw_context`).
+
+[ROCm/hrx-system#37]: https://github.com/ROCm/hrx-system/pull/37
