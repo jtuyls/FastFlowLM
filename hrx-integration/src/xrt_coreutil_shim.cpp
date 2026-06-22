@@ -34,6 +34,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // HRX forwarding (enabled at runtime via FLM_FORWARD=1).
@@ -77,7 +78,11 @@ struct BoImpl {
     size_t size = 0;
     uint64_t id = 0;
     hrx_buffer_t hbuf = nullptr;  // forward-mode device buffer
-    void* mapped = nullptr;       // unused (legacy)
+    // Direct-map mode: persistent host-coherent mapping of hbuf that the engine
+    // reads/writes in place (no host staging copy). When non-null, `data` is
+    // unused and coherence is kept via hrx_buffer_flush_range/invalidate_range.
+    // Null => legacy staging path (the `data` vector is the engine's buffer).
+    void* mapped = nullptr;
     // forward-mode dirty tracking:
     //  host_dirty: host data not yet on device (needs h2d before dispatch).
     //  dev_dirty:  device data not yet on host (needs d2h before host read).
@@ -308,13 +313,31 @@ public:
         std::fprintf(stderr, "[fwd] chaining: chains=%llu chained_dispatches=%llu\n",
                      (unsigned long long)f.n_chain,
                      (unsigned long long)f.n_chain_disp);
+        std::fprintf(stderr,
+                     "[fwd] readback (lazy=%d): runlist-deferred=%llu "
+                     "host-flushed=%llu\n",
+                     f.lazy_readback ? 1 : 0,
+                     (unsigned long long)f.d2h_deferred,
+                     (unsigned long long)f.d2h_flushed);
     }
 
     bool chain = true;  // batch runlists into one ERT_CMD_CHAIN (FLM_CHAIN=0 off)
+    // L2: defer readback of CHAINED runlist outputs. A runlist output is usually
+    // consumed by a later runlist (input bound to the device buffer directly), so
+    // copying it to host eagerly is waste. We instead mark it dev_dirty and copy
+    // it back lazily only if/when the host actually reads it (bo::map or
+    // bo::sync(FROM_DEVICE)). Pure on-device intermediates are thus never copied.
+    // Singles (run::start) stay eager: those carry host-read results (e.g. the
+    // sampled logits) that FLM reads via a cached host pointer without re-sync.
+    // ON by default; FLM_LAZY_READBACK=0 disables (read every output back).
+    bool lazy_readback = true;
+    std::atomic<uint64_t> d2h_deferred{0}, d2h_flushed{0};
     Forwarder() {
         enabled = std::getenv("FLM_FORWARD") != nullptr;
         const char* c = std::getenv("FLM_CHAIN");
         chain = !c || c[0] != '0';  // chaining ON by default; FLM_CHAIN=0 disables
+        const char* lz = std::getenv("FLM_LAZY_READBACK");
+        lazy_readback = !lz || lz[0] != '0';  // ON by default; =0 disables
         if (enabled) std::atexit(&Forwarder::print_stats);
     }
 
@@ -328,7 +351,9 @@ public:
         }
     }
 
-    // Build (or fetch cached) executable for this xclbin + control ELF.
+    // Build (or fetch cached) executable for this xclbin + control ELF, and
+    // resolve its export ordinal once (L5). Returns the executable; *ord_out gets
+    // the cached "MLIR_AIE" ordinal. On a cache hit the ELF is not even parsed.
     hrx_executable_t executable_for(const std::vector<uint8_t>& xclbin,
                                     const std::vector<uint8_t>& elf,
                                     std::vector<uint32_t>* patch_out,
@@ -421,7 +446,10 @@ static void forward_dispatch(RunImpl* r) {
         // h2d only dirty inputs (static weights upload once via sync tracking).
         if (a.bi && !a.bi->host_dirty) { fwd.h2d_skips++; }
         else {
-            hrx_stream_copy_h2d(fwd.stream, a.host, a.hbuf, 0, a.size);
+            if (a.bi && a.bi->mapped)
+                hrx_buffer_flush_range(a.hbuf, 0, a.size);  // in-place, no copy
+            else
+                hrx_stream_copy_h2d(fwd.stream, a.host, a.hbuf, 0, a.size);
             if (a.bi) a.bi->host_dirty = false;
             fwd.h2d_copies++;
             fwd.t_h2d_bytes += a.size;
@@ -440,17 +468,25 @@ static void forward_dispatch(RunImpl* r) {
         uint64_t t2 = now_us();
         hrx_stream_synchronize(fwd.stream);
         fwd.t_sync += now_us() - t2;
-        // read the output back via map() (cheap host-cache invalidate, no submit).
+        // Single dispatches have no in-batch consumer to prove the output is a
+        // pure intermediate. Direct-map: defer the host-cache invalidate to the
+        // host's next map()/sync (flush_readback) so pure on-device intermediates
+        // are never touched. Staging: copy the output back to host.
         if (out && out->hbuf) {
             uint64_t t3 = now_us();
-            void* p = nullptr;
-            if (hrx_status_is_ok(hrx_buffer_map(out->hbuf, HRX_MAP_READ, 0,
-                                                out->size, &p)) && p) {
-                std::memcpy(out->data.data(), p, out->size);
-                hrx_buffer_unmap(out->hbuf);
-                fwd.t_d2h_bytes += out->size;
-            }
             out->host_dirty = false;
+            if (out->mapped) {
+                if (fwd.lazy_readback) { out->dev_dirty = true; fwd.d2h_deferred++; }
+                else hrx_buffer_invalidate_range(out->hbuf, 0, out->size);
+            } else {
+                void* p = nullptr;
+                if (hrx_status_is_ok(hrx_buffer_map(out->hbuf, HRX_MAP_READ, 0,
+                                                    out->size, &p)) && p) {
+                    std::memcpy(out->data.data(), p, out->size);
+                    hrx_buffer_unmap(out->hbuf);
+                    fwd.t_d2h_bytes += out->size;
+                }
+            }
             fwd.t_d2h += now_us() - t3;
         }
     }
@@ -519,15 +555,18 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
         for (auto& a : r->args) {
             if (!a.is_bo || !a.hbuf || !a.host) continue;
             if (a.bi && !a.bi->host_dirty) { fwd.h2d_skips++; continue; }
-            hrx_stream_copy_h2d(fwd.stream, a.host, a.hbuf, 0, a.size);
+            if (a.bi && a.bi->mapped)
+                hrx_buffer_flush_range(a.hbuf, 0, a.size);  // in-place, no copy
+            else
+                hrx_stream_copy_h2d(fwd.stream, a.host, a.hbuf, 0, a.size);
             fwd.t_h2d_bytes += a.size;
             if (a.bi) a.bi->host_dirty = false; fwd.h2d_copies++;
         }
     }
     fwd.t_h2d += now_us() - t0;
     // phase 2: record every dispatch (no sync -> HRX coalesces into one chain).
-    // L6: reuse one bindings vector across runs (clear() keeps capacity) so the
-    // hot loop does not heap-allocate a fresh vector per dispatch.
+    // L6: reuse one bindings vector across runs (clear() keeps its capacity) so
+    // the hot loop does not heap-allocate a fresh vector per dispatch.
     std::vector<BoImpl*> outs; int n = 0;
     std::vector<hrx_buffer_ref_t> binds;
     uint64_t t1 = now_us();
@@ -537,6 +576,7 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
         // context-switch tracking across the runlist (and prior dispatches).
         if (k->xclbin.get() == fwd.last_xclbin_disp) fwd.n_same++;
         else { fwd.n_switch++; fwd.last_xclbin_disp = k->xclbin.get(); }
+        // patch is appended to by parse_control_elf, so it must be fresh per run.
         std::vector<uint32_t> patch;
         uint32_t ord = 0;
         hrx_executable_t exe = fwd.executable_for(k->xclbin->bytes, k->module->elf->bytes, &patch, &ord);
@@ -557,18 +597,51 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
     uint64_t t2 = now_us();
     hrx_stream_synchronize(fwd.stream);
     fwd.t_sync += now_us() - t2;
-    // phase 4: map()-readback outputs (cheap host-cache invalidate, no submit)
+    // phase 4: readback. With lazy (default), defer: mark each output dev_dirty
+    // and skip the copy; flush_readback() pulls it on demand when the host maps
+    // or syncs the buffer. Outputs consumed only by later runlists are never
+    // flushed (device stays the source of truth). Eager path copies all back.
     uint64_t t3 = now_us();
     for (BoImpl* b : outs) {
         if (!b || !b->hbuf) continue;
+        b->host_dirty = false;  // device is fresh; next dispatch can skip h2d
+        if (fwd.lazy_readback) { b->dev_dirty = true; fwd.d2h_deferred++; continue; }
+        if (b->mapped) { hrx_buffer_invalidate_range(b->hbuf, 0, b->size); continue; }
         void* p = nullptr;
         if (hrx_status_is_ok(hrx_buffer_map(b->hbuf, HRX_MAP_READ, 0, b->size, &p)) && p) {
             std::memcpy(b->data.data(), p, b->size); hrx_buffer_unmap(b->hbuf);
             fwd.t_d2h_bytes += b->size;
         }
-        b->host_dirty = false;
     }
     fwd.t_d2h += now_us() - t3;
+}
+
+// L2: pull a deferred runlist output to host on demand. Called from bo::map()/
+// bo::sync(FROM_DEVICE) right before the host reads the buffer. Only acts on
+// buffers carrying un-copied device output (dev_dirty); the producing runlist
+// already synchronized the stream, so the device buffer is ready.
+static void flush_readback(BoImpl* b) {
+    auto& fwd = Forwarder::get();
+    if (!fwd.enabled || !fwd.lazy_readback || !b || !b->dev_dirty || !b->hbuf)
+        return;
+    std::lock_guard<std::mutex> lk(fwd.mu);
+    if (!b->dev_dirty) return;  // re-check under lock
+    uint64_t t0 = now_us();
+    if (b->mapped) {
+        // direct-map: just invalidate the host cache (no copy).
+        hrx_buffer_invalidate_range(b->hbuf, 0, b->size);
+    } else {
+        void* p = nullptr;
+        if (hrx_status_is_ok(hrx_buffer_map(b->hbuf, HRX_MAP_READ, 0, b->size,
+                                            &p)) && p) {
+            std::memcpy(b->data.data(), p, b->size);
+            hrx_buffer_unmap(b->hbuf);
+            fwd.t_d2h_bytes += b->size;
+        }
+    }
+    b->dev_dirty = false;
+    fwd.t_d2h += now_us() - t0;
+    fwd.d2h_flushed++;
 }
 
 }  // namespace cap
@@ -807,7 +880,8 @@ bo::~bo() = default;
 void* bo::map() {
     if (!handle) return nullptr;
     auto b = as<BoImpl>(handle);
-    return as<BoImpl>(handle)->data.data();  // host staging
+    flush_readback(b);  // L2: pull deferred runlist output before the host reads
+    return b->mapped ? b->mapped : b->data.data();  // direct map or host staging
 }
 size_t bo::size() const {
     return handle ? as<BoImpl>(handle)->size : 0;
@@ -819,8 +893,10 @@ void bo::sync(xclBOSyncDirection dir, size_t, size_t) {
     if (dir == XCL_BO_SYNC_BO_TO_DEVICE) {
         fwd.sync_to++;
         b->host_dirty = true;  // engine wrote host; needs re-upload before dispatch
+        b->dev_dirty = false;  // host is now the source of truth
     } else {
         fwd.sync_from++;
+        flush_readback(b);  // L2: pull deferred runlist output before the host reads
     }
 }
 
@@ -830,23 +906,46 @@ ext::bo::bo(const device&, size_t sz) {
     b->size = sz;
     b->id = Registry::get().bo_counter++;
     auto& fwd = Forwarder::get();
-    b->data.assign(sz, 0);  // host staging the engine maps + read/writes
     if (fwd.enabled) {
         fwd.ensure_device();
-        // Device buffer for dispatch; data is synced host<->device explicitly
-        // around each dispatch (CALLER_SYNCS_BINDINGS; coherent map is unreliable).
+        // Preferred path: a device-visible, host-coherent BO mapped ONCE and kept
+        // mapped (persistent). The engine reads/writes this mapping directly, so
+        // there is no host staging copy (matches native XRT's single shared BO).
+        // These BOs are cached, not HW-coherent, so coherence is still maintained
+        // with an explicit clflush (hrx_buffer_flush_range/invalidate_range) around
+        // device work -- the same cost native XRT pays, minus the redundant memcpy.
         if (fwd.dev &&
+            hrx_status_is_ok(hrx_buffer_allocate(
+                fwd.stream, sz,
+                HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+                HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
+                &b->hbuf))) {
+            void* p = nullptr;
+            if (hrx_status_is_ok(hrx_buffer_map_persistent(
+                    b->hbuf, HRX_MAP_READ | HRX_MAP_WRITE, &p)) &&
+                p) {
+                b->mapped = p;
+                std::memset(p, 0, sz);  // flushed before first dispatch (host_dirty)
+                fwd.alloc_ok++;
+            } else {
+                hrx_buffer_release(b->hbuf);
+                b->hbuf = nullptr;
+            }
+        }
+        // Fallback: persistent map unavailable -> scoped BO + host staging copy.
+        if (!b->mapped && fwd.dev &&
             hrx_status_is_ok(hrx_buffer_allocate(
                 fwd.stream, sz,
                 HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
                 HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED,
                 &b->hbuf))) {
             fwd.alloc_ok++;
-        } else {
+        } else if (!b->mapped) {
             b->hbuf = nullptr;
             fwd.alloc_fail++;
         }
     }
+    if (!b->mapped) b->data.assign(sz, 0);  // host staging (legacy/fallback path)
     handle = b;
 }
 
@@ -874,7 +973,7 @@ void run::set_arg_at_index(int index, const bo& boh) {
     auto bi = boh.handle ? as<BoImpl>(boh.handle) : nullptr;
     b.size = bi ? bi->size : 0;
     b.hbuf = bi ? bi->hbuf : nullptr;
-    b.host = bi ? bi->data.data() : nullptr;
+    b.host = bi ? (bi->mapped ? bi->mapped : bi->data.data()) : nullptr;
     b.bi = bi;
     r->args.push_back(b);
 }
