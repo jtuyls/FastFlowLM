@@ -382,8 +382,10 @@ public:
         hrx_executable_t exe = nullptr;
         try {
             std::vector<uint8_t> xadx = flm_hrx::build_xadx(xclbin, {ep});
-            hrx_status_t s =
-                hrx_executable_load_data(dev, xadx.data(), xadx.size(), "", &exe);
+            // hrx_executable_load_data now requires the exact HAL executable
+            // format; build_xadx packages an xclbin-based amdxdna executable.
+            hrx_status_t s = hrx_executable_load_data(
+                dev, xadx.data(), xadx.size(), "amdxdna-xclbin-fb", &exe);
             if (!hrx_status_is_ok(s)) {
                 if (dbg) {
                     char* m = nullptr; size_t n = 0;
