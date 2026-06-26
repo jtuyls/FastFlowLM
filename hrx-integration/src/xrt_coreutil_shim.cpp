@@ -57,6 +57,7 @@ namespace cap {
 struct XclbinImpl {
     std::string path;
     std::vector<uint8_t> bytes;
+    size_t content_hash = 0;
 };
 struct DeviceImpl {};
 struct HwCtxImpl {
@@ -64,6 +65,10 @@ struct HwCtxImpl {
 };
 struct ElfImpl {
     std::vector<uint8_t> bytes;
+    std::vector<uint32_t> control_code;
+    std::vector<uint32_t> patch_table;
+    size_t control_hash = 0;
+    bool parse_ok = false;
 };
 struct ModuleImpl {
     std::shared_ptr<ElfImpl> elf;
@@ -72,6 +77,9 @@ struct KernelImpl {
     std::shared_ptr<ModuleImpl> module;
     std::shared_ptr<XclbinImpl> xclbin;
     std::string name;
+    hrx_executable_t executable = nullptr;
+    uint32_t executable_ordinal = 0;
+    bool executable_resolved = false;
 };
 struct BoImpl {
     std::vector<uint8_t> data;  // host staging the engine maps + read/writes
@@ -262,7 +270,22 @@ public:
     // L5: cache the executable AND its resolved "MLIR_AIE" export ordinal, so the
     // string-keyed lookup runs once per distinct control program, not per dispatch.
     struct CachedExe { hrx_executable_t exe = nullptr; uint32_t ord = 0; };
-    std::unordered_map<size_t, CachedExe> exe_cache;  // control-hash -> {exe,ord}
+    struct ExecutableKey {
+        size_t xclbin_hash = 0;
+        size_t control_hash = 0;
+        bool operator==(const ExecutableKey& other) const {
+            return xclbin_hash == other.xclbin_hash &&
+                   control_hash == other.control_hash;
+        }
+    };
+    struct ExecutableKeyHash {
+        size_t operator()(const ExecutableKey& key) const {
+            return key.xclbin_hash ^
+                   (key.control_hash + 0x9e3779b97f4a7c15ull +
+                    (key.xclbin_hash << 6) + (key.xclbin_hash >> 2));
+        }
+    };
+    std::unordered_map<ExecutableKey, CachedExe, ExecutableKeyHash> exe_cache;
     std::vector<BoImpl*> pending_out;  // outputs written by un-flushed dispatches
     std::atomic<uint64_t> dispatched{0}, skipped{0}, exe_fail{0};
     std::atomic<uint64_t> alloc_ok{0}, alloc_fail{0};
@@ -351,37 +374,37 @@ public:
         }
     }
 
-    // Build (or fetch cached) executable for this xclbin + control ELF, and
-    // resolve its export ordinal once (L5). Returns the executable; *ord_out gets
-    // the cached "MLIR_AIE" ordinal. On a cache hit the ELF is not even parsed.
-    hrx_executable_t executable_for(const std::vector<uint8_t>& xclbin,
-                                    const std::vector<uint8_t>& elf,
+    // Build (or fetch cached) executable for this xclbin + parsed control ELF,
+    // and resolve its export ordinal once. Returns the executable; *ord_out gets
+    // the cached "MLIR_AIE" ordinal.
+    hrx_executable_t executable_for(const XclbinImpl& xclbin,
+                                    const ElfImpl& elf,
                                     std::vector<uint32_t>* patch_out,
                                     uint32_t* ord_out) {
         static bool dbg = std::getenv("FLM_FORWARD_DEBUG") != nullptr;
-        std::vector<uint32_t> cc;
-        if (!parse_control_elf(elf, 3, &cc, patch_out) || cc.empty()) {
+        if (!elf.parse_ok || elf.control_code.empty()) {
             if (dbg)
                 std::fprintf(stderr,
                              "[fwd] executable_for: parse FAILED (elf=%zuB cc=%zu)\n",
-                             elf.size(), cc.size());
+                             elf.bytes.size(), elf.control_code.size());
             return nullptr;
         }
-        size_t h = std::hash<std::string_view>{}(std::string_view(
-            (const char*)cc.data(), cc.size() * 4));
-        auto it = exe_cache.find(h);
+        if (patch_out)
+            *patch_out = elf.patch_table;
+        ExecutableKey key = {xclbin.content_hash, elf.control_hash};
+        auto it = exe_cache.find(key);
         if (it != exe_cache.end()) { if (ord_out) *ord_out = it->second.ord; return it->second.exe; }
         flm_hrx::XadxEntryPoint ep;
         ep.name = "MLIR_AIE";
         ep.pdi_index = 0;
         ep.xclbin_index = 0;
         flm_hrx::XadxRun run;
-        run.control_code = cc;
-        run.patch_table = *patch_out;
+        run.control_code = elf.control_code;
+        run.patch_table = elf.patch_table;
         ep.runs.push_back(run);
         hrx_executable_t exe = nullptr;
         try {
-            std::vector<uint8_t> xadx = flm_hrx::build_xadx(xclbin, {ep});
+            std::vector<uint8_t> xadx = flm_hrx::build_xadx(xclbin.bytes, {ep});
             // hrx_executable_load_data now requires the exact HAL executable
             // format; build_xadx packages an xclbin-based amdxdna executable.
             hrx_status_t s = hrx_executable_load_data(
@@ -392,7 +415,7 @@ public:
                     hrx_status_to_string(s, &m, &n);
                     std::fprintf(stderr,
                                  "[fwd] load_data FAILED (xclbin=%zuB cc=%zu xadx=%zuB): %s\n",
-                                 xclbin.size(), cc.size(), xadx.size(), m ? m : "?");
+                                 xclbin.bytes.size(), elf.control_code.size(), xadx.size(), m ? m : "?");
                     hrx_status_free_message(m);
                 }
                 hrx_status_ignore(s);
@@ -404,9 +427,25 @@ public:
         }
         uint32_t ord = 0;
         if (exe) hrx_executable_lookup_export_by_name(exe, "MLIR_AIE", &ord);
-        exe_cache[h] = {exe, ord};
+        exe_cache[key] = {exe, ord};
         if (ord_out) *ord_out = ord;
         return exe;
+    }
+
+    // Preload the HRX executable at xrt::kernel construction time, when FLM has
+    // already paired a hw_context/xclbin with a module/control ELF. This moves
+    // executable lookup/build out of the dispatch hot path while preserving the
+    // existing lazy fallback for unusual construction orders.
+    void resolve_kernel_executable_locked(KernelImpl* kernel) {
+        if (!enabled || !kernel || kernel->executable_resolved) return;
+        if (!dev) ensure_device();
+        if (!dev || !kernel->xclbin || !kernel->module || !kernel->module->elf)
+            return;
+        uint32_t ord = 0;
+        kernel->executable = executable_for(*kernel->xclbin, *kernel->module->elf,
+                                            /*patch_out=*/nullptr, &ord);
+        kernel->executable_ordinal = ord;
+        kernel->executable_resolved = true;
     }
 };
 
@@ -430,10 +469,12 @@ static void forward_dispatch(RunImpl* r) {
     if (!k->xclbin || !k->module || !k->module->elf) return;
     std::lock_guard<std::mutex> lk(fwd.mu);
     if (!fwd.dev) return;
-    std::vector<uint32_t> patch;
     uint32_t ord = 0;
-    hrx_executable_t exe =
-        fwd.executable_for(k->xclbin->bytes, k->module->elf->bytes, &patch, &ord);
+    if (!k->executable_resolved) {
+        fwd.resolve_kernel_executable_locked(k.get());
+    }
+    hrx_executable_t exe = k->executable;
+    ord = k->executable_ordinal;
     if (!exe) { fwd.exe_fail++; return; }
     // context-switch tracking: did this dispatch change xclbin from the last one?
     if (k->xclbin.get() == fwd.last_xclbin_disp) fwd.n_same++;
@@ -578,10 +619,12 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
         // context-switch tracking across the runlist (and prior dispatches).
         if (k->xclbin.get() == fwd.last_xclbin_disp) fwd.n_same++;
         else { fwd.n_switch++; fwd.last_xclbin_disp = k->xclbin.get(); }
-        // patch is appended to by parse_control_elf, so it must be fresh per run.
-        std::vector<uint32_t> patch;
         uint32_t ord = 0;
-        hrx_executable_t exe = fwd.executable_for(k->xclbin->bytes, k->module->elf->bytes, &patch, &ord);
+        if (!k->executable_resolved) {
+            fwd.resolve_kernel_executable_locked(k.get());
+        }
+        hrx_executable_t exe = k->executable;
+        ord = k->executable_ordinal;
         if (!exe) { fwd.exe_fail++; continue; }
         binds.clear(); BoImpl* out = nullptr;
         for (const auto& a : r->args) { if (!a.is_bo) continue; if (!a.hbuf) { out=nullptr; break; }
@@ -777,6 +820,9 @@ xclbin::xclbin(const std::string& fnm) {
         f.seekg(0);
         x->bytes.resize((size_t)n);
         f.read(reinterpret_cast<char*>(x->bytes.data()), n);
+        x->content_hash = std::hash<std::string_view>{}(
+            std::string_view(reinterpret_cast<const char*>(x->bytes.data()),
+                             x->bytes.size()));
     }
     handle = x;
 }
@@ -851,6 +897,13 @@ elf::elf(const void* data, size_t size) {
     auto e = std::make_shared<ElfImpl>();
     e->bytes.assign(reinterpret_cast<const uint8_t*>(data),
                     reinterpret_cast<const uint8_t*>(data) + size);
+    e->parse_ok =
+        parse_control_elf(e->bytes, 3, &e->control_code, &e->patch_table);
+    if (e->parse_ok && !e->control_code.empty()) {
+        e->control_hash = std::hash<std::string_view>{}(
+            std::string_view(reinterpret_cast<const char*>(e->control_code.data()),
+                             e->control_code.size() * sizeof(uint32_t)));
+    }
     handle = e;
 }
 
@@ -871,6 +924,11 @@ ext::kernel::kernel(const hw_context& ctx, const module& mod,
     k->module = std::static_pointer_cast<ModuleImpl>(mod.handle);
     if (ctx.handle) k->xclbin = as<HwCtxImpl>(ctx.handle)->xclbin;
     k->name = name;
+    auto& fwd = Forwarder::get();
+    if (fwd.enabled) {
+        std::lock_guard<std::mutex> lk(fwd.mu);
+        fwd.resolve_kernel_executable_locked(k.get());
+    }
     if (dbg())
         std::fprintf(stderr, "[cap] ext::kernel(\"%s\") xclbin=%s\n", name.c_str(),
                      k->xclbin ? k->xclbin->path.c_str() : "(none)");
