@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -109,6 +110,7 @@ struct Binding {
 struct RunImpl {
     std::shared_ptr<KernelImpl> kernel;
     std::vector<Binding> args;
+    uint64_t graph_node = 0;
 };
 struct RunlistImpl {
     std::vector<std::shared_ptr<RunImpl>> runs;
@@ -260,8 +262,8 @@ static bool parse_control_elf(const std::vector<uint8_t>& e, int scalar_args,
 class Forwarder {
 public:
     static Forwarder& get() {
-        static Forwarder f;
-        return f;
+        static Forwarder* f = new Forwarder();
+        return *f;
     }
     bool enabled = false;
     hrx_device_t dev = nullptr;
@@ -301,6 +303,11 @@ public:
     std::atomic<uint64_t> n_same{0}, n_switch{0};
     // chained-path (forward_runlist): #chains formed, #dispatches chained
     std::atomic<uint64_t> n_chain{0}, n_chain_disp{0};
+    bool graph_enabled = false;
+    std::string graph_path;
+    std::ofstream graph;
+    uint64_t graph_next_node = 1;
+    uint64_t graph_records = 0;
 
     static void print_stats() {
         auto& f = get();
@@ -342,6 +349,11 @@ public:
                      f.lazy_readback ? 1 : 0,
                      (unsigned long long)f.d2h_deferred,
                      (unsigned long long)f.d2h_flushed);
+        if (f.graph_enabled) {
+            std::fprintf(stderr, "[fwd] graph: records=%llu path=%s\n",
+                         (unsigned long long)f.graph_records,
+                         f.graph_path.c_str());
+        }
     }
 
     bool chain = true;  // batch runlists into one ERT_CMD_CHAIN (FLM_CHAIN=0 off)
@@ -361,6 +373,21 @@ public:
         chain = !c || c[0] != '0';  // chaining ON by default; FLM_CHAIN=0 disables
         const char* lz = std::getenv("FLM_LAZY_READBACK");
         lazy_readback = !lz || lz[0] != '0';  // ON by default; =0 disables
+        const char* gd = std::getenv("FLM_GRAPH_DUMP");
+        if (gd && gd[0]) {
+            graph_path = (std::strcmp(gd, "1") == 0) ? "/tmp/flm_graph.jsonl" : gd;
+            std::error_code ec;
+            std::filesystem::path path(graph_path);
+            if (path.has_parent_path())
+                std::filesystem::create_directories(path.parent_path(), ec);
+            graph.open(graph_path, std::ios::out | std::ios::trunc);
+            if (graph) {
+                graph_enabled = true;
+            } else {
+                std::fprintf(stderr, "[fwd] graph dump open FAILED: %s\n",
+                             graph_path.c_str());
+            }
+        }
         if (enabled) std::atexit(&Forwarder::print_stats);
     }
 
@@ -457,6 +484,116 @@ static inline uint64_t now_us() {
         .count();
 }
 
+static void graph_escape(std::ofstream& os, const std::string& value) {
+    for (char c : value) {
+        switch (c) {
+            case '\\': os << "\\\\"; break;
+            case '"': os << "\\\""; break;
+            case '\n': os << "\\n"; break;
+            case '\r': os << "\\r"; break;
+            case '\t': os << "\\t"; break;
+            default: os << c; break;
+        }
+    }
+}
+
+static uint64_t graph_new_node_locked(Forwarder& fwd) {
+    return fwd.graph_next_node++;
+}
+
+static void graph_write_binding_locked(Forwarder& fwd, const Binding& binding,
+                                       size_t bo_ordinal) {
+    if (!binding.is_bo)
+        return;
+    BoImpl* bo = binding.bi;
+    fwd.graph << "{\"slot\":" << binding.index << ",\"ordinal\":" << bo_ordinal
+              << ",\"size\":" << binding.size;
+    if (bo) {
+        fwd.graph << ",\"bo\":" << bo->id
+                  << ",\"host_dirty\":" << (bo->host_dirty ? "true" : "false")
+                  << ",\"dev_dirty\":" << (bo->dev_dirty ? "true" : "false");
+    }
+    fwd.graph << "}";
+}
+
+static void graph_write_dispatch_locked(Forwarder& fwd, RunImpl* run,
+                                        uint64_t runlist_node,
+                                        int runlist_ordinal) {
+    if (!fwd.graph_enabled || !fwd.graph || !run || !run->kernel)
+        return;
+    if (!run->graph_node)
+        run->graph_node = graph_new_node_locked(fwd);
+    KernelImpl* kernel = run->kernel.get();
+    fwd.graph << "{\"record\":\"node\",\"node\":" << run->graph_node
+              << ",\"kind\":\"dispatch\"";
+    if (runlist_node)
+        fwd.graph << ",\"runlist\":" << runlist_node
+                  << ",\"runlist_ordinal\":" << runlist_ordinal;
+    fwd.graph << ",\"kernel\":\"";
+    graph_escape(fwd.graph, kernel->name);
+    fwd.graph << "\",\"xclbin_hash\":"
+              << (kernel->xclbin ? kernel->xclbin->content_hash : 0)
+              << ",\"control_hash\":"
+              << ((kernel->module && kernel->module->elf)
+                      ? kernel->module->elf->control_hash
+                      : 0)
+              << ",\"bindings\":[";
+    size_t bo_ordinal = 0;
+    for (const auto& binding : run->args) {
+        if (!binding.is_bo)
+            continue;
+        if (bo_ordinal)
+            fwd.graph << ",";
+        graph_write_binding_locked(fwd, binding, bo_ordinal++);
+    }
+    fwd.graph << "]}\n";
+    ++fwd.graph_records;
+    fwd.graph.flush();
+}
+
+static uint64_t graph_write_runlist_locked(
+    Forwarder& fwd, std::vector<std::shared_ptr<RunImpl>>& runs) {
+    if (!fwd.graph_enabled || !fwd.graph)
+        return 0;
+    uint64_t node = graph_new_node_locked(fwd);
+    fwd.graph << "{\"record\":\"node\",\"node\":" << node
+              << ",\"kind\":\"runlist\",\"runs\":[";
+    for (size_t i = 0; i < runs.size(); ++i) {
+        RunImpl* run = runs[i].get();
+        if (run && !run->graph_node)
+            run->graph_node = graph_new_node_locked(fwd);
+        if (i)
+            fwd.graph << ",";
+        fwd.graph << (run ? run->graph_node : 0);
+    }
+    fwd.graph << "]}\n";
+    ++fwd.graph_records;
+    fwd.graph.flush();
+    return node;
+}
+
+static void graph_write_bo_event_locked(Forwarder& fwd, const char* event,
+                                        BoImpl* bo, size_t size,
+                                        size_t offset) {
+    if (!fwd.graph_enabled || !fwd.graph || !bo)
+        return;
+    fwd.graph << "{\"record\":\"event\",\"event\":\"" << event
+              << "\",\"bo\":" << bo->id << ",\"size\":" << size
+              << ",\"offset\":" << offset << "}\n";
+    ++fwd.graph_records;
+    fwd.graph.flush();
+}
+
+static void graph_write_node_event_locked(Forwarder& fwd, const char* event,
+                                          uint64_t node) {
+    if (!fwd.graph_enabled || !fwd.graph || !node)
+        return;
+    fwd.graph << "{\"record\":\"event\",\"event\":\"" << event
+              << "\",\"node\":" << node << "}\n";
+    ++fwd.graph_records;
+    fwd.graph.flush();
+}
+
 // Dispatch one captured run through HRX (per-dispatch synchronous path): h2d
 // dirty inputs, dispatch, synchronize, then read the output back via map() (a
 // cheap host-cache invalidate, NOT a per-buffer queue submit). Used for
@@ -496,10 +633,13 @@ static void forward_dispatch(RunImpl* r) {
             if (a.bi) a.bi->host_dirty = false;
             fwd.h2d_copies++;
             fwd.t_h2d_bytes += a.size;
+            graph_write_bo_event_locked(fwd, "h2d_upload", a.bi, a.size, 0);
         }
         binds.push_back({a.hbuf, 0, a.size});
     }
     if (binds.empty()) { fwd.skipped++; return; }
+    graph_write_dispatch_locked(fwd, r, /*runlist_node=*/0,
+                                /*runlist_ordinal=*/-1);
     fwd.t_h2d += now_us() - t0;
     hrx_dispatch_config_t cfg = {{1, 1, 1}, {1, 1, 1}, 0};
     uint64_t t1 = now_us();
@@ -511,6 +651,7 @@ static void forward_dispatch(RunImpl* r) {
         uint64_t t2 = now_us();
         hrx_stream_synchronize(fwd.stream);
         fwd.t_sync += now_us() - t2;
+        graph_write_node_event_locked(fwd, "dispatch_submit", r->graph_node);
         // Single dispatches have no in-batch consumer to prove the output is a
         // pure intermediate. Direct-map: defer the host-cache invalidate to the
         // host's next map()/sync (flush_readback) so pure on-device intermediates
@@ -591,6 +732,7 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
     if (!fwd.enabled || !fwd.dev) return;
     std::lock_guard<std::mutex> lk(fwd.mu);
     maybe_capture_runlist(runs);
+    uint64_t graph_runlist_node = graph_write_runlist_locked(fwd, runs);
     // phase 1: DMA h2d for all dirty inputs
     uint64_t t0 = now_us();
     for (auto& rp : runs) {
@@ -603,6 +745,7 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
             else
                 hrx_stream_copy_h2d(fwd.stream, a.host, a.hbuf, 0, a.size);
             fwd.t_h2d_bytes += a.size;
+            graph_write_bo_event_locked(fwd, "h2d_upload", a.bi, a.size, 0);
             if (a.bi) a.bi->host_dirty = false; fwd.h2d_copies++;
         }
     }
@@ -613,9 +756,10 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
     std::vector<BoImpl*> outs; int n = 0;
     std::vector<hrx_buffer_ref_t> binds;
     uint64_t t1 = now_us();
+    int runlist_index = 0;
     for (auto& rp : runs) {
-        RunImpl* r = rp.get(); if (!r || !r->kernel) continue;
-        auto k = r->kernel; if (!k->xclbin || !k->module || !k->module->elf) continue;
+        RunImpl* r = rp.get(); if (!r || !r->kernel) { ++runlist_index; continue; }
+        auto k = r->kernel; if (!k->xclbin || !k->module || !k->module->elf) { ++runlist_index; continue; }
         // context-switch tracking across the runlist (and prior dispatches).
         if (k->xclbin.get() == fwd.last_xclbin_disp) fwd.n_same++;
         else { fwd.n_switch++; fwd.last_xclbin_disp = k->xclbin.get(); }
@@ -625,16 +769,18 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
         }
         hrx_executable_t exe = k->executable;
         ord = k->executable_ordinal;
-        if (!exe) { fwd.exe_fail++; continue; }
+        if (!exe) { fwd.exe_fail++; ++runlist_index; continue; }
         binds.clear(); BoImpl* out = nullptr;
         for (const auto& a : r->args) { if (!a.is_bo) continue; if (!a.hbuf) { out=nullptr; break; }
             if (!out) out = a.bi; binds.push_back({a.hbuf, 0, a.size}); }
-        if (binds.empty()) continue;
+        if (binds.empty()) { ++runlist_index; continue; }
+        graph_write_dispatch_locked(fwd, r, graph_runlist_node, runlist_index);
         hrx_dispatch_config_t cfg = {{1,1,1},{1,1,1},0};
         if (hrx_status_is_ok(hrx_stream_dispatch(fwd.stream, exe, ord, &cfg, nullptr, 0,
                                                  binds.data(), binds.size(), HRX_DISPATCH_FLAG_NONE))) {
             if (out) outs.push_back(out); n++;
         }
+        ++runlist_index;
     }
     fwd.t_disp += now_us() - t1;
     fwd.dispatched += n; fwd.n_chain++; fwd.n_chain_disp += n;
@@ -642,6 +788,7 @@ static void forward_runlist(std::vector<std::shared_ptr<RunImpl>>& runs) {
     uint64_t t2 = now_us();
     hrx_stream_synchronize(fwd.stream);
     fwd.t_sync += now_us() - t2;
+    graph_write_node_event_locked(fwd, "runlist_submit", graph_runlist_node);
     // phase 4: readback. With lazy (default), defer: mark each output dev_dirty
     // and skip the copy; flush_readback() pulls it on demand when the host maps
     // or syncs the buffer. Outputs consumed only by later runlists are never
@@ -687,6 +834,7 @@ static void flush_readback(BoImpl* b) {
     b->dev_dirty = false;
     fwd.t_d2h += now_us() - t0;
     fwd.d2h_flushed++;
+    graph_write_bo_event_locked(fwd, "readback", b, b->size, 0);
 }
 
 }  // namespace cap
@@ -941,22 +1089,35 @@ void* bo::map() {
     if (!handle) return nullptr;
     auto b = as<BoImpl>(handle);
     flush_readback(b);  // L2: pull deferred runlist output before the host reads
+    auto& fwd = Forwarder::get();
+    if (fwd.enabled && fwd.graph_enabled) {
+        std::lock_guard<std::mutex> lk(fwd.mu);
+        graph_write_bo_event_locked(fwd, "map", b, b->size, 0);
+    }
     return b->mapped ? b->mapped : b->data.data();  // direct map or host staging
 }
 size_t bo::size() const {
     return handle ? as<BoImpl>(handle)->size : 0;
 }
-void bo::sync(xclBOSyncDirection dir, size_t, size_t) {
+void bo::sync(xclBOSyncDirection dir, size_t size, size_t offset) {
     auto b = handle ? as<BoImpl>(handle) : nullptr;
     auto& fwd = Forwarder::get();
     if (!b || !fwd.enabled) return;
     if (dir == XCL_BO_SYNC_BO_TO_DEVICE) {
         fwd.sync_to++;
+        if (fwd.graph_enabled) {
+            std::lock_guard<std::mutex> lk(fwd.mu);
+            graph_write_bo_event_locked(fwd, "sync_to", b, size, offset);
+        }
         b->host_dirty = true;  // engine wrote host; needs re-upload before dispatch
         b->dev_dirty = false;  // host is now the source of truth
     } else {
         fwd.sync_from++;
         flush_readback(b);  // L2: pull deferred runlist output before the host reads
+        if (fwd.graph_enabled) {
+            std::lock_guard<std::mutex> lk(fwd.mu);
+            graph_write_bo_event_locked(fwd, "sync_from", b, size, offset);
+        }
     }
 }
 

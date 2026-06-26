@@ -40,7 +40,8 @@ with `FLM_FORWARD=1`, it:
    it passes to `xrt::elf`) and extracts `.ctrltext` → TXN control code, and
    `.rela.dyn` → a `(offset, arg_idx, arg_plus)` patch table.
 2. Wraps the kernel's `.xclbin` + control code + patch table into an HRX **XADX**
-   executable (`src/hrx_xadx_builder.hpp`), cached by control-code hash.
+   executable (`src/hrx_xadx_builder.hpp`), cached by `.xclbin` + control-code
+   hash.
 3. Allocates an HRX device buffer per `xrt::bo`, syncs host↔device explicitly
    (`copy_h2d`/`copy_d2h`), and dispatches via `hrx_stream_dispatch`. HRX
    host-patches buffer addresses into the control code (npu4 `COMMAND_CHAIN`
@@ -409,6 +410,18 @@ separate dispatch over one captured runlist).
 
 Debug env: `FLM_FORWARD_DEBUG=1` logs executable build/load failures and xclbin
 byte counts; `FLM_FORWARD=0` disables forwarding entirely.
+
+### Graph dump
+
+Set `FLM_GRAPH_DUMP=/path/to/flm_graph.jsonl` to write a default-off JSONL
+trace of the dynamic dispatch graph observed by the interposer. Each record is a
+single JSON object. The dump includes runlist nodes, dispatch nodes, xclbin and
+control-code hashes, bound BO ids/sizes, and host boundary events such as
+`sync_to`, `sync_from`, `map`, `h2d_upload`, and `readback`.
+
+Use this for offline analysis of repeated dispatch shapes and host/device
+boundaries. It is diagnostic infrastructure, not a benchmark mode; graph records
+are flushed as they are written so the file survives interrupted runs.
 
 ## 8. Limitations
 
