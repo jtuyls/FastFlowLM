@@ -14,6 +14,14 @@
 
 using json = nlohmann::ordered_json;
 
+struct cache_match_info_t {
+    bool usable = false;         // whether the cache can be reused
+    size_t matched_rounds = 0;   // number of leading rounds whose checksum matched
+    size_t cached_rounds = 0;    // number of rounds currently held in the cache
+    size_t total_rounds = 0;     // number of rounds in the incoming request
+    bool tools_matched = false;  // whether the tool definitions matched
+};
+
 class PromptCache {
 private:
     std::vector<uint64_t> message_checksums_;
@@ -133,7 +141,16 @@ public:
 
 
     bool can_use_cache(json& messages, chat_template_type_t template_type, json& tools) {
+        cache_match_info_t info;
+        return can_use_cache(messages, template_type, tools, info);
+    }
+
+    bool can_use_cache(json& messages, chat_template_type_t template_type, json& tools, cache_match_info_t& info) {
         (void)template_type;
+        info = cache_match_info_t{};
+        info.total_rounds = messages.size();
+        info.cached_rounds = message_checksums_.size();
+
         if (messages.size() <= 2) {
             update_message_checksum(messages);
             update_tool_checksum(tools);
@@ -143,6 +160,15 @@ public:
         std::vector<uint64_t> new_checksums = _calculate_message_checksums(messages, messages.size());
         std::vector<uint64_t> new_tool_checksums = _calculate_tool_checksums(tools);
 
+        // Count how many leading rounds of the cached checksums still match the
+        // incoming request. This is the reusable KV-cache prefix length.
+        size_t matched = 0;
+        const size_t compare_len = std::min(message_checksums_.size(), new_checksums.size());
+        while (matched < compare_len && message_checksums_[matched] == new_checksums[matched]) {
+            ++matched;
+        }
+        info.matched_rounds = matched;
+
         // Cache is reusable when every previously seen message still appears
         // (in order) at the start of the new conversation, allowing rounds
         // produced by other backends (cloud) to be appended without
@@ -150,13 +176,15 @@ public:
         const size_t prefix_len = messages.size() - 2;
         const bool can_use_message =
             message_checksums_.size() <= prefix_len &&
-            std::equal(message_checksums_.begin(), message_checksums_.end(), new_checksums.begin());
+            matched == message_checksums_.size();
         const bool can_use_tools = tool_checksums_ == new_tool_checksums;
+        info.tools_matched = can_use_tools;
 
         message_checksums_ = std::move(new_checksums);
         tool_checksums_ = std::move(new_tool_checksums);
 
-        return can_use_message && can_use_tools;
+        info.usable = can_use_message && can_use_tools;
+        return info.usable;
     }
 
     /// @brief Reset the checksum to force cache miss

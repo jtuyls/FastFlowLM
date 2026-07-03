@@ -1077,13 +1077,22 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             model_used_for_last_message = model;
         }
         else {
-            can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools);
+            cache_match_info_t cache_info;
+            can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools, cache_info);
             if (can_use_prompt_cache) {
                 meta_info.restore_allowed = true;
                 header_print("FLM", "Use cached prompt!");
+                header_print("FLM", "Matched " + std::to_string(cache_info.matched_rounds) +
+                    " out of " + std::to_string(cache_info.total_rounds) + " rounds (" +
+                    std::to_string(cache_info.total_rounds - cache_info.matched_rounds) + " new to prefill).");
             }
             else {
                 // cannot use cache, clear and re-insert all
+                header_print("FLM", "Prompt cache miss.");
+                header_print("FLM", "Matched " + std::to_string(cache_info.matched_rounds) +
+                    " leading rounds; cached " + std::to_string(cache_info.cached_rounds) +
+                    ", request " + std::to_string(cache_info.total_rounds) +
+                    ", tools " + (cache_info.tools_matched ? "matched." : "changed."));
                 auto_chat_engine->clear_context();
             }
         }
