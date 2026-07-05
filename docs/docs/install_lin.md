@@ -179,6 +179,21 @@ If `flm validate` passes but `flm run` fails with `No such device with index '0'
    cmake --install --preset linux-default
    ```
 
+#### Advanced Build Options
+
+**Static Build with Bundled XRT/XDNA**
+
+To build a fully static binary that bundles XRT and XDNA driver (no system XRT required):
+
+```sh
+cd src
+cmake --preset linux-static
+cmake --build build -j$(nproc)
+sudo cmake --install build
+```
+
+This will automatically fetch and build XRT (v2.21.75) and XDNA driver from source if not found on your system. The resulting binary is fully self-contained and more portable.
+
 ---
 
 ## 4. Validating NPU Setup

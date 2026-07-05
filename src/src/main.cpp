@@ -70,9 +70,10 @@ void preload_bundled_libraries() {
     // bundled XRT libs (e.g. $SNAP/usr/lib/x86_64-linux-gnu).  Passing a
     // bare library name lets the dynamic linker resolve it via
     // LD_LIBRARY_PATH, which avoids hard-coding the arch triplet.
-    // Outside of a snap the libs are expected to live next to the binary.
+    // Outside of a snap the bundled libraries are expected to live in
+    // lib/ relative to the executable.
     const char* snap_env = std::getenv("SNAP");
-    std::string lib_prefix = snap_env && *snap_env ? "" : exe_dir + "/";
+    std::string lib_prefix = snap_env && *snap_env ? "" : exe_dir + "/lib/";
 
     const std::vector<std::string> libraries = {
         "libxrt_core.so.2",           // Core - no dependencies

@@ -23,6 +23,15 @@
       }
     },
     {
+      "name": "linux-portable",
+      "displayName": "Linux Portable Build",
+      "description": "Linux portable build - bundles XRT/XDNA libraries, builds FFmpeg statically",
+      "inherits": "linux-default",
+      "cacheVariables": {
+        "FLM_PORTABLE_BUILD": "ON"
+      }
+    },
+    {
       "name": "linux-snap",
       "displayName": "Linux Snap Build",
       "description": "Configuration for building inside a snapcraft part",
@@ -62,6 +71,12 @@
       "displayName": "Linux Default Build",
       "description": "Build Linux preset in Release",
       "configurePreset": "linux-default"
+    },
+    {
+      "name": "linux-portable",
+      "displayName": "Linux Portable Build",
+      "description": "Build portable distribution with bundled libraries",
+      "configurePreset": "linux-portable"
     },
     {
       "name": "windows-default",

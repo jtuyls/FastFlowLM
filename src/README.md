@@ -61,6 +61,72 @@ cmake --build build --target check_dependencies
 
 **Note:** Some custom libraries (XRT, NPU libraries) may still require DLLs if static versions aren't available.
 
+### Static Build (Portable Binary)
+
+FastFlowLM can be built as a portable static binary with XRT and FFmpeg bundled in. This eliminates the need for system dependencies and creates a truly self-contained executable.
+
+**Simple static build:**
+
+```bash
+# Use the linux-static preset
+cmake --preset linux-static
+cmake --build build -j$(nproc)
+```
+
+This will:
+1. Check if XRT and FFmpeg are installed via pkg-config
+2. If not found, automatically fetch from source:
+   - XRT (v2.21.75)
+   - FFmpeg (v7.1)
+3. Build both as static libraries
+4. Link them into the flm binary
+
+**What gets statically linked:**
+- ✅ XRT (Xilinx Runtime)
+- ✅ FFmpeg (libavformat, libavcodec, libavutil, libswscale, libswresample)
+
+**What remains dynamic:**
+- XDNA driver plugin (runtime plugin - see below)
+- Model-specific libraries (llama_npu, qwen_npu, etc.)
+- System libraries (libc, libm, etc.)
+
+**Manual options:**
+
+```bash
+# Enable static build manually
+cmake --preset linux-default -DFLM_STATIC_BUILD=ON
+cmake --build build -j$(nproc)
+```
+
+**Customizing source versions:**
+
+```bash
+cmake --preset linux-static \
+  -DXRT_GIT_TAG=2.21.75 \
+  -DFFMPEG_GIT_TAG=n7.1
+cmake --build build -j$(nproc)
+```
+
+**Benefits:**
+- ✅ Maximum portability - fewer system dependencies
+- ✅ No system XRT or FFmpeg installation required
+- ✅ Reproducible builds with pinned versions
+- ✅ Simpler deployment
+- ✅ Works across different Linux distributions
+
+**Notes:**
+- First build takes longer (~10-15 minutes) as dependencies are compiled
+- Subsequent builds are much faster (dependencies are cached)
+- Binary size increases by ~20MB due to embedded libraries
+- Requires build tools (git, gcc, cmake, make) during build
+- When static build is disabled, uses system packages
+
+**XDNA Driver Plugin:**
+The XDNA userspace plugin (`libxrt_driver_xdna.so.2`) is a runtime plugin that XRT loads dynamically. It is NOT statically linked. You need to either:
+- Install from system packages: `sudo apt install libxrt-npu2` (Ubuntu/Debian)
+- Have the plugin in `/usr/lib/` or alongside the binary in `lib/`
+- XRT will automatically discover and load the plugin at runtime
+
 ### Creating Deployment Package
 Use the provided deployment script:
 
