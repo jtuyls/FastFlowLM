@@ -44,19 +44,10 @@
 #include <drm/drm.h>
 #include "amdxdna_accel.h"
 #endif
-#include "xrt/xrt_bo.h"
-#include "xrt/xrt_device.h"
-#include "xrt/xrt_kernel.h"
+#include "hrx_cpp/hrx_cpp.hpp"
 #include "buffer.hpp"
 #include "utils/debug_utils.hpp"
 #include <cmath>
-
-#include "xrt/experimental/xrt_kernel.h"
-#include "xrt/experimental/xrt_ext.h"
-#include "xrt/experimental/xrt_module.h"
-#include "xrt/experimental/xrt_elf.h"
-
-#include "aiebu/aiebu.h"
 
 #include "npu_instr_utils.hpp"
 
@@ -69,12 +60,12 @@ class npu_xclbin_manager;
 ///@param device the pointer to the device
 ///@param context the pointer to the context
 ///@param kernel_name the name of the kernel
-///@see xrt::kernel, xrt::device
+///@see hrx::kernel, hrx::device
 class npu_app {
 private:
     // from external
-    xrt::hw_context* context;
-    xrt::device* device;
+    hrx::hw_context* context;
+    hrx::device* device;
     std::string kernel_name;
     npu_device device_gen;
     bool enable_preemption;
@@ -82,48 +73,31 @@ private:
     // self-managed
     bool module_valid;
     uint8_t module_version;
-    std::unique_ptr<xrt::module> module;
-    std::unique_ptr<xrt::elf> elf;
-    std::unique_ptr<xrt::ext::kernel> kernel;
+    hrx_executable_t exe;  // HRX direct executable built from ctrl_seq->dump()
+    uint32_t exe_ord;      // resolved "MLIR_AIE" export ordinal
     std::unique_ptr<npu_sequence> ctrl_seq;
 
-    uint32_t _gen_elf(char** elf_buf, std::pair<uint32_t*, size_t>& instruction_data){
-        uint32_t elf_buf_size = aiebu_assembler_get_elf(
-            aiebu_assembler_buffer_type_blob_instr_transaction,
-            (char*) instruction_data.first, instruction_data.second * sizeof(uint32_t),
-            NULL, 0, (void**)elf_buf, NULL, 0, "", "", NULL, 0);
-        assert(elf_buf_size > 0);
-        if (elf_buf_size == 0){
-            header_print_r("ERROR", "Failed to get elf from ctrl_seq");
-            exit(1);
-        }
-        return elf_buf_size;
-    }
-
     ///@brief Setup the kernel
-    ///@note The function will create an elf file from the ctrl_seq
-    ///@note The function will also update the module, elf, and kernel
+    ///@note Builds (or fetches a cached) HRX XADX executable directly from the
+    ///      ctrl_seq TXN stream (npu_sequence::dump()). aiebu/ELF are not used.
     void _setup_kernel(){
-        char* elf_buf;
-        this->kernel.reset();
-        this->module.reset();
-        this->elf.reset();
         std::pair<uint32_t*, size_t> data = this->ctrl_seq->dump();
         assert(data.first != nullptr);
         assert(data.second > 0);
-        uint32_t elf_buf_size = this->_gen_elf(&elf_buf, data);
-        if (this->module_valid){
-            this->module.reset();
-            this->elf.reset();
-            this->kernel.reset();
+        assert(this->context != nullptr);
+        // Host patch table: the addresses of bound buffers are patched into the
+        // control-code BD registers by the amdxdna host-patch path (replaces the
+        // aiebu/ELF relocations).
+        std::vector<uint32_t> patch = this->ctrl_seq->dump_patch_table();
+        this->exe = hrx::build_or_get_executable(
+            this->context->xclbin_bytes(), data.first, data.second,
+            patch.data(), patch.size(), &this->exe_ord);
+        if (this->exe == nullptr){
+            header_print_r("ERROR", "Failed to build HRX executable from ctrl_seq");
+            exit(1);
         }
-        this->elf = std::make_unique<xrt::elf>(elf_buf, elf_buf_size);
-        this->module = std::make_unique<xrt::module>(*this->elf);
-        this->kernel = std::make_unique<xrt::ext::kernel>(*this->context, *this->module, this->kernel_name);
         this->module_valid = true;
         this->module_version = this->ctrl_seq->sequence_version();
-
-        free((void*)elf_buf);
     }
 
 public:
@@ -160,12 +134,11 @@ public:
     ///@note Initialize the npu_app to nullptr
     npu_app() {
         this->device_gen = device_npu2;
-        this->kernel = nullptr;
         this->device = nullptr;
+        this->context = nullptr;
         this->module_valid = false;
-        this->module = nullptr;
-        this->elf = nullptr;
-        this->kernel = nullptr;
+        this->exe = nullptr;
+        this->exe_ord = 0;
         this->module_version = 0xFF;
     }
 
@@ -174,13 +147,12 @@ public:
     ///@param device the pointer to the device
     ///@param context the pointer to the context
     ///@param kernel_name the name of the kernel
-    ///@see xrt::device, xrt::hw_context, xrt::kernel
-    npu_app(npu_device device_gen, xrt::device* device, xrt::hw_context* context, std::string kernel_name, bool enable_preemption = false):
+    ///@see hrx::device, hrx::hw_context, hrx::kernel
+    npu_app(npu_device device_gen, hrx::device* device, hrx::hw_context* context, std::string kernel_name, bool enable_preemption = false):
         device_gen(device_gen), device(device), context(context), kernel_name(kernel_name), enable_preemption(enable_preemption){
         this->module_valid = false;
-        this->module = nullptr;
-        this->elf = nullptr;
-        this->kernel = nullptr;
+        this->exe = nullptr;
+        this->exe_ord = 0;
         this->ctrl_seq = std::make_unique<npu_sequence>(device_gen, enable_preemption);
         this->module_version = 0xFF;
     }
@@ -192,41 +164,31 @@ public:
     }
 
     void load_elf(std::string elf_name){
-        this->ctrl_seq->clear_cmds();
-        this->ctrl_seq->cmds2seq(); // just for making sure the sequence is valid
-        this->elf = std::make_unique<xrt::elf>(elf_name);
-        this->module = std::make_unique<xrt::module>(*this->elf);
-        this->kernel = std::make_unique<xrt::ext::kernel>(*this->context, *this->module, this->kernel_name);
-        this->module_valid = true;
-        this->module_version = this->ctrl_seq->sequence_version(); // force sync the sequence version
+        // ELF-based control loading relied on aiebu and is not used on the
+        // HRX backend (control code comes from ctrl_seq->dump()).
+        (void)elf_name;
+        header_print("warning", "npu_app::load_elf is not supported on the HRX backend (ignored)");
     }
 
     void store_elf(std::string elf_name){
-        char* elf_buf;
-        if (this->module_valid == false) {
-            this->_setup_kernel();
-        }
-        std::pair<uint32_t*, size_t> data = this->ctrl_seq->dump();
-        uint32_t elf_buf_size = this->_gen_elf(&elf_buf, data);
-        std::ofstream fout(elf_name, std::ios::binary);
-        if (fout.is_open() == false) {
-            header_print_r("ERROR", "Failed to open file: " << elf_name);
-            exit(1);
-        }
-        fout.write((char*)elf_buf, elf_buf_size);
-        fout.close();
-        free((void*)elf_buf);
+        (void)elf_name;
+        header_print("warning", "npu_app::store_elf is not supported on the HRX backend (ignored)");
     }
 
     ///@brief Operator() for running the kernel
     ///@param args arguments, shall be the buffers with real bo
-    ///@see xrt::run
+    ///@see hrx::run
     template<typename... BoArgs>
     ert_cmd_state operator()(BoArgs&&... args){
         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
             this->_setup_kernel();
         }
-        auto run = this->kernel->operator()(3, 0, 0, args.bo()...);
+        hrx::run run(this->exe, this->exe_ord);
+        std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
+        for (size_t i = 0; i < sizeof...(args); i++){
+            run.add_binding(bo_args[i]->bo().handle(), bo_args[i]->bo().size());
+        }
+        run.start();
         ert_cmd_state state = run.wait();
         LOG_VERBOSE(2, "ending state: " << this->cmd_state_map[state]);
         return state;
@@ -235,7 +197,7 @@ public:
     
     ///@brief Operator() for running the kernel
     ///@param args arguments, shall be the buffers with real bo
-    ///@see xrt::run
+    ///@see hrx::run
     template<typename... BoArgs>
     ert_cmd_state safe_run(BoArgs&&... args){
         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
@@ -245,7 +207,11 @@ public:
         for (size_t i = 0; i < sizeof...(args); i++){
             bo_args[i]->sync_to_device();
         }
-        auto run = this->kernel->operator()(3, 0, 0, args.bo()...);
+        hrx::run run(this->exe, this->exe_ord);
+        for (size_t i = 0; i < sizeof...(args); i++){
+            run.add_binding(bo_args[i]->bo().handle(), bo_args[i]->bo().size());
+        }
+        run.start();
         ert_cmd_state state = run.wait();
         for (size_t i = 0; i < sizeof...(args); i++){
             bo_args[i]->sync_from_device();
@@ -257,19 +223,18 @@ public:
     ///@brief Create a run object
     ///@param args arguments, shall be the buffers with real bo
     ///@return a run object for waiting
-    ///@see xrt::run
+    ///@see hrx::run
     template<typename... BoArgs>
-    xrt::run create_run(BoArgs&&... args){
+    hrx::run create_run(BoArgs&&... args){
         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
             this->_setup_kernel();
         }
-        xrt::run run = xrt::run(*this->kernel);
-        run.set_arg(0, 3);
-        run.set_arg(1, 0);
-        run.set_arg(2, 0);
+        hrx::run run(this->exe, this->exe_ord);
+        // HRX bindings are the buffer args only, in order (arg 3 = output). The
+        // (3,0,0) opcode scalars are encoded in the TXN stream, not as bindings.
         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
         for (size_t i = 0; i < sizeof...(args); i++){
-            run.set_arg(3 + i, bo_args[i]->bo());
+            run.add_binding(bo_args[i]->bo().handle(), bo_args[i]->bo().size());
         }
         return run;
     }
@@ -293,8 +258,8 @@ class npu_app_manager {
 private:
     npu_device device_gen;
     bool enable_preemption;
-    xrt::device* device;
-    std::unique_ptr<xrt::hw_context> context;
+    hrx::device* device;
+    std::unique_ptr<hrx::hw_context> context;
     std::string kernel_name;
     std::string xclbin_name;
     bool xclbin_valid;
@@ -303,7 +268,7 @@ public:
     ///@param device_gen the npu device
     ///@param device device object
     ///@param xclbin_name name of the xclbin file
-    ///@see xrt::device, xrt::xclbin
+    ///@see hrx::device, hrx::xclbin
     ///@note The function will initialize the npu_app_manager to nullptr
     npu_app_manager(){
         this->device_gen = device_npu2;
@@ -325,7 +290,7 @@ public:
         this->xclbin_valid = other.xclbin_valid;
         this->enable_preemption = other.enable_preemption;
         if (other.context) {
-            this->context = std::make_unique<xrt::hw_context>(*other.context);
+            this->context = std::make_unique<hrx::hw_context>(*other.context);
         } else {
             this->context = nullptr;
         }
@@ -343,7 +308,7 @@ public:
             this->xclbin_valid = other.xclbin_valid;
             this->enable_preemption = other.enable_preemption;
             if (other.context) {
-                this->context = std::make_unique<xrt::hw_context>(*other.context);
+                this->context = std::make_unique<hrx::hw_context>(*other.context);
             } else {
                 this->context = nullptr;
             }
@@ -389,8 +354,8 @@ public:
     ///@param device_gen the npu device
     ///@param device device object
     ///@param xclbin_name name of the xclbin file
-    ///@see xrt::device, xrt::xclbin
-    npu_app_manager(npu_device device_gen, xrt::device* device, std::string xclbin_name, bool enable_preemption = false){
+    ///@see hrx::device, hrx::xclbin
+    npu_app_manager(npu_device device_gen, hrx::device* device, std::string xclbin_name, bool enable_preemption = false){
         assert(device != nullptr);
         assert(xclbin_name != "");
         this->device_gen = device_gen;
@@ -405,21 +370,23 @@ public:
         }
         #endif
         LOG_VERBOSE(2, "Loading xclbin: " << xclbin_name);
-        auto this_xclbin = xrt::xclbin(xclbin_name);
+        auto this_xclbin = hrx::xclbin(xclbin_name);
         // int verbosity = VERBOSE;
         std::string Node = "MLIR_AIE";
         auto xkernels = this_xclbin.get_kernels();
         auto xkernel = *std::find_if(
             xkernels.begin(), 
             xkernels.end(),
-            [Node](xrt::xclbin::kernel &k) {
+            [Node](hrx::xclbin::kernel &k) {
                 auto name = k.get_name();
                 return name.rfind(Node, 0) == 0;
             }
         );
         this->device->register_xclbin(this_xclbin);
         auto kernelName = xkernel.get_name();
-        this->context = std::make_unique<xrt::hw_context>(*this->device, this_xclbin.get_uuid());
+        // Pass the xclbin (its raw bytes) into the context so npu_app can build
+        // the HRX XADX executable that wraps it.
+        this->context = std::make_unique<hrx::hw_context>(*this->device, this_xclbin);
         this->kernel_name = kernelName;
         this->xclbin_valid = true;
         LOG_VERBOSE(2, "Xclbin: " << xclbin_name << " loaded successfully!");
@@ -454,11 +421,11 @@ public:
 
     ///@brief Create a runlist
     ///@return a runlist object
-    ///@see xrt::runlist
-    xrt::runlist create_runlist(){
+    ///@see hrx::runlist
+    hrx::runlist create_runlist(){
         assert(this->xclbin_valid);
         assert(this->enable_preemption == false); // preemption is not supported for runlist
-        return xrt::runlist(*this->context);
+        return hrx::runlist(*this->context);
     }
 };
 
@@ -472,17 +439,17 @@ private:
 
     size_t xclbin_count;
     // the only device instance
-    xrt::device* device;
+    hrx::device* device;
     bool enable_preemption;
     npu_device npu_gen;
 public:
-    constexpr static int max_xclbins = 16; // This is hard constraint from the XRT driver
+    constexpr static int max_xclbins = 16; // This is hard constraint from the HRX driver
     
     ///@brief Constructor, this shall not invoke by user, it shall only be invoked by main
     ///@param device the npu device
     ///@param device_id the device id
-    ///@see xrt::device
-    npu_xclbin_manager(npu_device device = device_npu2, xrt::device* device_inst = nullptr, bool enable_preemption = false){
+    ///@see hrx::device
+    npu_xclbin_manager(npu_device device = device_npu2, hrx::device* device_inst = nullptr, bool enable_preemption = false){
         this->device = device_inst;
         // this->npu_xclbins.resize(max_xclbins);
         this->npu_xclbins.reserve(max_xclbins);

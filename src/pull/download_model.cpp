@@ -9,6 +9,7 @@
 #include <iostream>
 #include <filesystem>
 #include <iomanip>
+#include <thread>
 #include "utils/utils.hpp"
 #include "nlohmann/json.hpp"
 #include "picosha2.h" 

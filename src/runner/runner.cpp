@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <fstream>
 #include <algorithm>
+#include <thread>
 
 /// \brief Command map for command line input
 std::map<std::string, runner_cmd_t> cmd_map = {
@@ -39,7 +40,7 @@ std::map<std::string, runner_cmd_t> cmd_map = {
 Runner::Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args)
     : supported_models(supported_models), downloader(downloader), tag(args.model_tag), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption) {
 
-    this->npu_device_inst = xrt::device(0);
+    this->npu_device_inst = hrx::device(0);
 
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;

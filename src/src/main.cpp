@@ -49,48 +49,11 @@
 
 #include "AutoModel/automodel.hpp"
 
-#ifndef _WIN32
-#include <dlfcn.h>
-#endif
-
 // Global variables
 ///@brief should_exit is used to control the server thread
 std::atomic<bool> should_exit(false);
 std::mutex exit_mutex;
 std::condition_variable exit_cv;
-
-#ifndef _WIN32
-///@brief Preload critical XRT libraries from the executable directory
-///@details This ensures that dlopen() calls within libraries find the bundled versions
-///@note Only on Linux/Unix; Windows handles DLL loading differently
-void preload_bundled_libraries() {
-    std::string exe_dir = utils::get_executable_directory();
-
-    // When running inside a snap, LD_LIBRARY_PATH already points at the
-    // bundled XRT libs (e.g. $SNAP/usr/lib/x86_64-linux-gnu).  Passing a
-    // bare library name lets the dynamic linker resolve it via
-    // LD_LIBRARY_PATH, which avoids hard-coding the arch triplet.
-    // Outside of a snap the bundled libraries are expected to live in
-    // lib/ relative to the executable.
-    const char* snap_env = std::getenv("SNAP");
-    std::string lib_prefix = snap_env && *snap_env ? "" : exe_dir + "/lib/";
-
-    const std::vector<std::string> libraries = {
-        "libxrt_core.so.2",           // Core - no dependencies
-        "libxrt_coreutil.so.2",       // Depends on core
-        "libxrt_driver_xdna.so.2",    // Driver
-    };
-
-    // Try to load the library with RTLD_GLOBAL so symbols are available to dependent libraries
-    // Don't care about failures
-    for (const auto& lib : libraries) {
-        std::string lib_path = lib_prefix + lib;
-        void* handle = dlopen(lib_path.c_str(), RTLD_LAZY | RTLD_GLOBAL);
-    }
-}
-#endif
-
-
 
 #ifdef _WIN32
 ///@brief get_unicode_command_line_args gets Unicode command line arguments
@@ -463,9 +426,6 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-#else
-    // Preload bundled libraries from executable directory
-    preload_bundled_libraries();
 #endif
     
     // Parse command line arguments using Boost Program Options
@@ -507,13 +467,17 @@ int main(int argc, char* argv[]) {
     }
   
     if (parsed_args.command == "serve" || parsed_args.command == "run" || parsed_args.command == "bench"){
-        // Configure AMD XRT for the specified power mode
-        if (parsed_args.power_mode == "default" || parsed_args.power_mode == "powersaver" || parsed_args.power_mode == "balanced" || 
+        // Configure AMD NPU power mode on Windows via the vendor utility.
+        if (parsed_args.power_mode == "default" || parsed_args.power_mode == "powersaver" || parsed_args.power_mode == "balanced" ||
             parsed_args.power_mode == "performance" || parsed_args.power_mode == "turbo") {
 #ifdef _WIN32
-            std::string xrt_cmd = "cd \"C:\\Windows\\System32\\AMD\" && .\\xrt-smi.exe configure --pmode " + parsed_args.power_mode + " > NUL 2>&1";
+            // TODO(native-hrx): replace this xrt-smi call once HRX exposes
+            // power-mode control through libhrx or an HRX CLI. The amdxdna
+            // native layer has set_power_mode plumbing, but hrx-info does not
+            // currently expose it.
+            std::string pmode_cmd = "cd \"C:\\Windows\\System32\\AMD\" && .\\xrt-smi.exe configure --pmode " + parsed_args.power_mode + " > NUL 2>&1";
             header_print("FLM", "Configuring NPU Power Mode to " + parsed_args.power_mode + (got_power_mode ? "" : " (flm default)"));
-            (void)system(xrt_cmd.c_str());
+            (void)system(pmode_cmd.c_str());
 #endif
         }
         else{

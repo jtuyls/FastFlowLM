@@ -10,7 +10,7 @@
 
 
 /************              Qwen3 family            **************/
-Qwen3::Qwen3(xrt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3") {}
+Qwen3::Qwen3(hrx::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3") {}
 
 void Qwen3::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
@@ -293,7 +293,7 @@ StreamResult Qwen3::parse_stream_content(const std::string content) {
 }
 
 /************              Qwen3_IT family            **************/
-Qwen3_IT::Qwen3_IT(xrt::device* npu_device_inst) : AutoModel(npu_device_inst) {}
+Qwen3_IT::Qwen3_IT(hrx::device* npu_device_inst) : AutoModel(npu_device_inst) {}
 
 void Qwen3_IT::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
@@ -481,7 +481,7 @@ StreamResult Qwen3_IT::parse_stream_content(const std::string content) {
 }
 
 /************              Qwen3_TK family            **************/
-Qwen3_TK::Qwen3_TK(xrt::device* npu_device_inst) : AutoModel(npu_device_inst) {}
+Qwen3_TK::Qwen3_TK(hrx::device* npu_device_inst) : AutoModel(npu_device_inst) {}
 
 void Qwen3_TK::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
@@ -743,7 +743,7 @@ StreamResult Qwen3_TK::parse_stream_content(const std::string content) {
 }
 
 /************              DeepSeek_r1_0528_8b family            **************/
-DeepSeek_r1_0528_8b::DeepSeek_r1_0528_8b(xrt::device* npu_device_inst) : AutoModel(npu_device_inst) {}
+DeepSeek_r1_0528_8b::DeepSeek_r1_0528_8b(hrx::device* npu_device_inst) : AutoModel(npu_device_inst) {}
 
 void DeepSeek_r1_0528_8b::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);

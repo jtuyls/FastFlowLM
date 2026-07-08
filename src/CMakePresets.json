@@ -25,7 +25,7 @@
     {
       "name": "linux-portable",
       "displayName": "Linux Portable Build",
-      "description": "Linux portable build - bundles XRT/XDNA libraries, builds FFmpeg statically",
+      "description": "Linux portable build - bundles engine/HRX libraries, builds FFmpeg statically",
       "inherits": "linux-default",
       "cacheVariables": {
         "FLM_PORTABLE_BUILD": "ON"

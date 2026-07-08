@@ -9,6 +9,8 @@ if(NOT DEFINED NPU_VERSION)
     message(FATAL_ERROR "NPU_VERSION must be specified externally. Use -DNPU_VERSION=<version> when running cmake.")
 endif()
 
+set(FLM_ENGINE_LIB_DIR ${CMAKE_SOURCE_DIR}/lib CACHE PATH "Where FastFlowLM engine shared libraries live")
+
 # Set build type to Release
 set(CMAKE_BUILD_TYPE Release)
 
@@ -29,29 +31,17 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build/)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
 # ———————————————————————————————————————————————
-# User-tweakable static build settings
+# User-tweakable native HRX settings
 # ———————————————————————————————————————————————
-option(FLM_PORTABLE_BUILD "Build portable distribution with bundled libraries (XRT dynamic, FFmpeg static)" OFF)
+option(FLM_PORTABLE_BUILD "Build portable distribution with bundled libraries (FFmpeg static)" OFF)
+set(HRX_DIR "" CACHE PATH "Where HRX sources live")
+set(HRX_BUILD "" CACHE PATH "Where HRX build artifacts live")
+set(HRX_LIB_DIR "" CACHE PATH "Where HRX libraries live")
 
-if(WIN32)
-    set(XRT_INCLUDE_DIR C:/dev/XRT/src/runtime_src/core/include CACHE PATH   "Where XRT headers live")
-    set(XRT_LIB_DIR     C:/dev/xrtNPUfromDLL     CACHE PATH   "Where XRT libs live")
-else()
-    # On Linux, find pkg-config first, then use it to find XRT
+if(NOT WIN32)
     find_package(PkgConfig)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(XRT xrt)
-        if(XRT_FOUND)
-            message(STATUS "Found XRT via pkg-config")
-            message(STATUS "  XRT include dirs: ${XRT_INCLUDE_DIRS}")
-            message(STATUS "  XRT library dirs: ${XRT_LIBRARY_DIRS}")
-            message(STATUS "  XRT libraries: ${XRT_LIBRARIES}")
-        endif()
-    endif()
 
     # Check if we need to fetch dependencies from source for portable build
-    # For portable build: always build FFmpeg statically, only fetch XRT if not found
-    set(NEED_FETCH_XRT FALSE)
     set(NEED_BUILD_FFMPEG_STATIC FALSE)
     set(NEED_BUILD_ZLIB_STATIC FALSE)
 
@@ -60,70 +50,11 @@ else()
         set(NEED_BUILD_FFMPEG_STATIC TRUE)
         set(NEED_BUILD_ZLIB_STATIC TRUE)
         message(STATUS "Portable build: FFmpeg and zlib will be built statically")
-
-        if(NOT XRT_FOUND)
-            set(NEED_FETCH_XRT TRUE)
-            message(STATUS "XRT not found on system, will fetch from source for portable build")
-        else()
-            message(STATUS "XRT found on system, will use it for portable build")
-        endif()
     endif()
 
-    # Include FetchContent if needed for either XRT, FFmpeg, or zlib
-    if(NEED_FETCH_XRT OR NEED_BUILD_FFMPEG_STATIC OR NEED_BUILD_ZLIB_STATIC)
+    # Include FetchContent if needed for either FFmpeg or zlib
+    if(NEED_BUILD_FFMPEG_STATIC OR NEED_BUILD_ZLIB_STATIC)
         include(FetchContent)
-    endif()
-
-    if(NEED_FETCH_XRT)
-        message(STATUS "Fetching XRT from source...")
-
-        # ———————————————————————————————————————————————
-        # 1. Fetch XRT first (XDNA driver depends on it)
-        # ———————————————————————————————————————————————
-        set(XRT_GIT_REPO "https://github.com/Xilinx/XRT.git" CACHE STRING "XRT Git repository URL")
-        set(XRT_GIT_TAG "2.21.75" CACHE STRING "XRT Git tag/branch to fetch")
-
-        FetchContent_Declare(
-            xrt_source
-            GIT_REPOSITORY ${XRT_GIT_REPO}
-            GIT_TAG ${XRT_GIT_TAG}
-            GIT_SHALLOW TRUE
-        )
-
-        # Configure XRT build options
-        set(XRT_NATIVE_BUILD ON CACHE BOOL "Native XRT build" FORCE)
-        set(BUILD_DOCS OFF CACHE BOOL "Build documentation" FORCE)
-
-        # Don't compile Alveo support - only base XRT needed
-        set(XRT_BASE 1 CACHE STRING "Build base XRT only" FORCE)
-        set(XRT_ALVEO 0 CACHE STRING "Disable Alveo support" FORCE)
-
-        # Disable building tools/utilities that have errors or aren't needed
-        set(XRT_BUILD_XBMGMT OFF CACHE BOOL "Build xbmgmt" FORCE)
-        set(XRT_BUILD_XBUTIL OFF CACHE BOOL "Build xbutil" FORCE)
-        set(XRT_BUILD_XBT OFF CACHE BOOL "Build xbt" FORCE)
-
-        message(STATUS "Fetching XRT sources...")
-        FetchContent_MakeAvailable(xrt_source)
-
-        # Set XRT paths for XDNA driver
-        set(XRT_REPO_DIR ${xrt_source_SOURCE_DIR})  # Root of XRT repo
-        set(XRT_BUILD_DIR ${xrt_source_BINARY_DIR})
-        set(XRT_INCLUDE_DIRS ${XRT_REPO_DIR}/src/runtime_src/core/include)
-
-        message(STATUS "XRT fetched successfully")
-        message(STATUS "  XRT repo dir: ${XRT_REPO_DIR}")
-        message(STATUS "  XRT build dir: ${XRT_BUILD_DIR}")
-
-        # Set variables for later use
-        set(XRT_BUILT_FROM_SOURCE TRUE)
-        set(XRT_LIBRARY_DIRS ${XRT_BUILD_DIR}/src/runtime_src)
-
-        # Note: XDNA userspace plugin is NOT built here as it requires exact version
-        # matching with XRT and has compatibility issues. The plugin should be:
-        # 1. Installed from system packages (libxrt-npu2)
-        # 2. Or placed in /usr/lib/ or lib/ directory manually
-        message(STATUS "Note: XDNA plugin (libxrt_driver_xdna.so.2) must be provided separately")
     endif()
 
     # ———————————————————————————————————————————————
@@ -246,11 +177,6 @@ else()
         message(STATUS "  zlib static lib: ${ZLIB_STATIC_LIB}")
     endif()
 
-    # Fallback to manual paths if pkg-config didn't find XRT and FLM_FETCH_XDNA is not enabled
-    if(NOT XRT_FOUND AND NOT XRT_BUILT_FROM_SOURCE)
-        set(XRT_INCLUDE_DIR /opt/xilinx/xrt/include CACHE PATH   "Where XRT headers live")
-        set(XRT_LIB_DIR     /opt/xilinx/xrt/lib     CACHE PATH   "Where XRT libs live")
-    endif()
 endif()
 
 # ———————————————————————————————————————————————
@@ -306,7 +232,6 @@ if(NOT WIN32)
     find_package(Threads REQUIRED)
     find_package(Boost REQUIRED COMPONENTS program_options)
     find_package(CURL REQUIRED)
-    # PkgConfig is already found earlier for XRT detection
     if(PkgConfig_FOUND)
         pkg_check_modules(FFTW3_PKG fftw3)
         pkg_check_modules(FFTW3F_PKG fftw3f)
@@ -333,12 +258,24 @@ target_include_directories(flm PUBLIC
     ${CMAKE_SOURCE_DIR}/pull
 )
 
-# Add XRT include directories
-if(NOT WIN32 AND XRT_FOUND)
-    target_include_directories(flm PUBLIC ${XRT_INCLUDE_DIRS})
-else()
-    target_include_directories(flm PUBLIC ${XRT_INCLUDE_DIR})
+if(NOT HRX_DIR OR NOT HRX_BUILD)
+    message(FATAL_ERROR "Native HRX build requires -DHRX_DIR=<hrx source dir> and -DHRX_BUILD=<hrx build dir>")
 endif()
+if(NOT HRX_LIB_DIR)
+    set(HRX_LIB_DIR "${HRX_BUILD}/libhrx/src/libhrx")
+endif()
+if(WIN32)
+    set(HRX_PLATFORM_SHIM_INCLUDE_DIR "${HRX_DIR}/runtime/src/iree/hal/drivers/amdxdna/shim/windows")
+else()
+    set(HRX_PLATFORM_SHIM_INCLUDE_DIR "${HRX_DIR}/runtime/src/iree/hal/drivers/amdxdna/shim/linux")
+endif()
+target_include_directories(flm PUBLIC
+    ${HRX_DIR}/libhrx/include
+    ${HRX_DIR}/runtime/src
+    ${HRX_PLATFORM_SHIM_INCLUDE_DIR}
+    ${HRX_BUILD}/runtime/src
+    ${HRX_BUILD}/_deps/flatcc-src/include
+)
 
 # Add FFmpeg include directories if built from source
 if(FFMPEG_BUILT_FROM_SOURCE)
@@ -358,6 +295,7 @@ target_compile_definitions(flm PUBLIC
     CMAKE_XCLBIN_PREFIX="${CMAKE_XCLBIN_PREFIX}"
     __FLM_VERSION__=\"${FLM_VERSION}\"
     __NPU_VERSION__=\"${NPU_VERSION}\"
+    FLM_NATIVE_HRX=1
 )
 
 if(WIN32)
@@ -376,15 +314,9 @@ if(WIN32)
 endif()
 
 target_link_directories(flm PUBLIC
-    ${CMAKE_SOURCE_DIR}/lib
+    ${FLM_ENGINE_LIB_DIR}
+    ${HRX_LIB_DIR}
 )
-
-# Add XRT library directories
-if(NOT WIN32 AND XRT_FOUND)
-    target_link_directories(flm PUBLIC ${XRT_LIBRARY_DIRS})
-else()
-    target_link_directories(flm PUBLIC ${XRT_LIB_DIR})
-endif()
 
 if(WIN32)
     target_link_directories(flm PUBLIC
@@ -396,23 +328,6 @@ endif()
 # Link static libraries first
 if(MSVC)
     target_link_libraries(flm PUBLIC ${STATIC_LIBS})
-endif()
-
-# ———————————————————————————————————————————————
-# Link XRT libraries (always dynamic)
-# ———————————————————————————————————————————————
-if(XRT_BUILT_FROM_SOURCE)
-    # If built from source, link to the shared library targets
-    if(TARGET xrt_coreutil)
-        target_link_libraries(flm PUBLIC xrt_coreutil)
-        message(STATUS "  Linked: xrt_coreutil (shared)")
-    endif()
-elseif(NOT WIN32 AND XRT_FOUND)
-    # Use pkg-config provided libraries
-    target_link_libraries(flm PUBLIC ${XRT_LIBRARIES})
-else()
-    # Fallback to manual linking
-    target_link_libraries(flm PUBLIC xrt_coreutil)
 endif()
 
 # Link your custom libraries (these may still be DLLs if no static versions available)
@@ -437,17 +352,8 @@ target_link_libraries(flm PUBLIC
     gemm
     lm_head
     mha
+    hrx
 )
-
-if(WIN32)
-    target_link_libraries(flm PUBLIC
-        aiebu_static
-    )
-else()
-    target_link_libraries(flm PUBLIC
-        aiebu
-    )
-endif()
 
 # Link FFmpeg libraries (static if built from source, dynamic otherwise)
 if(FFMPEG_BUILT_FROM_SOURCE)
@@ -550,9 +456,6 @@ else()
             target_link_libraries(flm PUBLIC ${READLINE_NCURSES_LIBRARY})
         endif()
     endif()
-
-    # Link with dl library for dlopen() support (used for preloading bundled libraries)
-    target_link_libraries(flm PUBLIC dl)
 endif()
 
 # ———————————————————————————————————————————————
@@ -600,101 +503,13 @@ else()
         set(CMAKE_INSTALL_LIBDIR "lib")
     endif()
 
-    file(GLOB so_libs "${CMAKE_SOURCE_DIR}/lib/*.so")
-    install(FILES ${so_libs} DESTINATION lib)
+    file(GLOB so_libs "${FLM_ENGINE_LIB_DIR}/*.so")
+    file(GLOB hrx_libs "${HRX_LIB_DIR}/libhrx.so*")
+    install(FILES ${so_libs} ${hrx_libs} DESTINATION lib)
+    set_target_properties(flm PROPERTIES BUILD_RPATH "${HRX_LIB_DIR}")
 
     # Bundle system libraries for portable distribution
     if(FLM_PORTABLE_BUILD)
-        # Copy XRT and XDNA libraries while preserving symlinks
-        install(CODE "
-            # Find source directory for XRT libraries
-            set(XRT_SOURCE_DIR \"\")
-            if(EXISTS \"/usr/lib/libxrt_coreutil.so.2\")
-                set(XRT_SOURCE_DIR \"/usr/lib\")
-            elseif(EXISTS \"/usr/lib/x86_64-linux-gnu/libxrt_coreutil.so.2\")
-                set(XRT_SOURCE_DIR \"/usr/lib/x86_64-linux-gnu\")
-            endif()
-
-            if(XRT_SOURCE_DIR)
-                # Find all XRT and Boost library files (including symlinks)
-                file(GLOB XRT_FILES \"\${XRT_SOURCE_DIR}/libxrt*.so*\")
-                file(GLOB BOOST_FILES \"\${XRT_SOURCE_DIR}/libboost_program_options.so*\")
-
-                foreach(LIB_FILE \${XRT_FILES} \${BOOST_FILES})
-                    get_filename_component(LIB_NAME \"\${LIB_FILE}\" NAME)
-                    set(DEST_FILE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/\${LIB_NAME}\")
-
-                    # Check if it's a symlink
-                    if(IS_SYMLINK \"\${LIB_FILE}\")
-                        # Get symlink target (relative path)
-                        file(READ_SYMLINK \"\${LIB_FILE}\" LINK_TARGET)
-                        message(STATUS \"Creating symlink: \${LIB_NAME} -> \${LINK_TARGET}\")
-                        execute_process(
-                            COMMAND \${CMAKE_COMMAND} -E create_symlink \"\${LINK_TARGET}\" \"\${DEST_FILE}\"
-                        )
-                    else()
-                        # Copy regular file
-                        message(STATUS \"Copying: \${LIB_NAME}\")
-                        file(COPY \"\${LIB_FILE}\" DESTINATION \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/\"
-                             FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
-                                             GROUP_READ GROUP_EXECUTE
-                                             WORLD_READ WORLD_EXECUTE)
-                    endif()
-                endforeach()
-
-                # Patch XRT libraries to use \$ORIGIN as RPATH so they find
-                # dependencies in the same lib/ directory instead of system paths
-                find_program(PATCHELF_EXECUTABLE patchelf)
-                if(PATCHELF_EXECUTABLE)
-                    file(GLOB XRT_LIBS \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/libxrt_*.so.*\")
-                    foreach(XRT_LIB \${XRT_LIBS})
-                        get_filename_component(XRT_LIB_NAME \"\${XRT_LIB}\" NAME)
-                        message(STATUS \"Setting RPATH on \${XRT_LIB_NAME}\")
-                        execute_process(
-                            COMMAND \${PATCHELF_EXECUTABLE} --set-rpath \"\$ORIGIN\" \"\${XRT_LIB}\"
-                            RESULT_VARIABLE RET
-                        )
-                        if(NOT RET EQUAL 0)
-                            message(WARNING \"Failed to set RPATH on \${XRT_LIB_NAME}\")
-                        endif()
-                    endforeach()
-                else()
-                    message(STATUS \"patchelf not found, skipping RPATH patching for XRT libraries\")
-                endif()
-
-                # XRT internally constructs library paths using \$XILINX_XRT prefix
-                # combined with lib/x86_64-linux-gnu. Create the expected structure
-                # with symlinks so XRT can find libxrt_core.so.2 from its bundled location.
-                set(XRT_MULTIARCH_DIR \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/x86_64-linux-gnu\")
-                file(MAKE_DIRECTORY \${XRT_MULTIARCH_DIR})
-
-                # Create symlinks for XRT libraries that XRT coreutil looks up
-                foreach(LIB_NAME libxrt_core.so libxrt_core.so.2 libxrt_core.so.2.21.75
-                                     libxrt_coreutil.so libxrt_coreutil.so.2 libxrt_coreutil.so.2.21.75
-                                     libxrt_driver_xdna.so.2 libxrt_driver_xdna.so.2.21.75
-                                     libxrt_hip.so libxrt_hip.so.2 libxrt_hip.so.2.21.75
-                                     libxrt_hwemu.so libxrt_hwemu.so.2 libxrt_hwemu.so.2.21.75
-                                     libxrt_noop.so libxrt_noop.so.2 libxrt_noop.so.2.21.75
-                                     libxrt_swemu.so libxrt_swemu.so.2 libxrt_swemu.so.2.21.75
-                                     libxrt++.so libxrt++.so.2 libxrt++.so.2.21.75)
-                    if(EXISTS \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/\${LIB_NAME}\")
-                        set(LINK_TARGET \"../\${LIB_NAME}\")
-                        set(LINK_DEST \"\${XRT_MULTIARCH_DIR}/\${LIB_NAME}\")
-                        if(IS_SYMLINK \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/\${LIB_NAME}\")
-                            # Read the original symlink target and make it relative to multiarch dir
-                            file(READ_SYMLINK \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/\${LIB_NAME}\" ORIG_TARGET)
-                            set(LINK_TARGET \"../\${ORIG_TARGET}\")
-                        endif()
-                        message(STATUS \"Creating symlink in multiarch dir: \${LIB_NAME} -> \${LINK_TARGET}\")
-                        execute_process(
-                            COMMAND \${CMAKE_COMMAND} -E create_symlink \"\${LINK_TARGET}\" \"\${LINK_DEST}\"
-                        )
-                    endif()
-                endforeach()
-            else()
-                message(WARNING \"XRT libraries not found in /usr/lib or /usr/lib/x86_64-linux-gnu\")
-            endif()
-        ")
         # Copy FFTW libraries while preserving symlinks so the portable
         # distribution does not depend on libfftw3 being installed on the host.
         install(CODE "
