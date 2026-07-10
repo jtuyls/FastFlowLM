@@ -285,9 +285,10 @@
                 },
                 "label": [
                     "vision",
-                    "reasoning"
+                    "reasoning",
+                    "tool-calling"
                 ],
-                "footprint": 22.6
+                "footprint": 24.3
             }
         },        
         "lfm2": {
