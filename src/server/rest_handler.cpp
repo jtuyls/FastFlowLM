@@ -514,24 +514,42 @@ json RestHandler::build_nstream_response(std::string response_text) {
     message["role"] = "assistant";
 
     bool is_reasoning = !result.reasoning_content.empty();
-    bool is_tool_call = !result.tool_name.empty();
+    bool is_tool_call = !result.tool_calls_list.empty() || !result.tool_name.empty();
 
     if (is_reasoning) {
         message["reasoning_content"] = result.reasoning_content;
     }
 
     if (is_tool_call) {
-        message["tool_calls"] = json::array({
-            {
+        json tool_calls_json = json::array();
+        if (!result.tool_calls_list.empty()) {
+            int idx = 0;
+            for (const auto& tc : result.tool_calls_list) {
+                tool_calls_json.push_back({
+                    {"index", idx++},
+                    {"id", "call_" + std::to_string(std::time(nullptr)) + "_" + std::to_string(idx)},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", tc.first},
+                        {"arguments", tc.second}
+                    }}
+                });
+            }
+        } else {
+            tool_calls_json.push_back({
                 {"index", 0},
-                {"id", "call_" + std::to_string(std::time(nullptr))}, 
+                {"id", "call_" + std::to_string(std::time(nullptr))},
                 {"type", "function"},
                 {"function", {
                     {"name", result.tool_name},
                     {"arguments", result.tool_args}
                 }}
-            }
-        });
+            });
+        }
+        message["tool_calls"] = tool_calls_json;
+        if (!result.content.empty()) {
+            message["content"] = result.content;
+        }
     }
     else {
         message["content"] = result.content;

@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
+#include <utility>
 #include <vector>
 #include <iostream>
 #include <string>
@@ -64,6 +65,7 @@ struct NonStreamResult {
 	std::string reasoning_content;
 	std::string tool_name;
 	std::string tool_args;
+	std::vector<std::pair<std::string, std::string>> tool_calls_list; // (name, args) for multiple tool calls
 };
 
 typedef enum {
