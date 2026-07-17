@@ -10,7 +10,7 @@ sections:
     body: |
       FastFlowLM curates the most requested families and publishes tuned manifests under `flm pull <model>`.
       We validate every build on Ryzen™ AI laptops and provide matching cards—see them [here](/docs/models/).
-      The catalog already covers 22 models spanning Gemma3 (Vision), Qwen3, GPT-OSS-20B (MoE), DeepSeek-R1, Whisper
+      The catalog already covers models spanning Qwen3.6 (MoE), Qwen3.5 (Vision), Gemma4 (omni), Qwen3, GPT-OSS-20B (MoE), DeepSeek-R1, Whisper
       (Audio), MedGemma (Medical), and other leading open families.
     ctas:
       - label: "View model docs"
@@ -22,15 +22,18 @@ sections:
         Each manifest describes quantization, context window, tokenizer, and recommended memory,
         so there are no surprises after download.
       pills:
-        - "LLaMA 3.x"
-        - "Gemma 3 (Vision)"
-        - "DeepSeek R-1"
+        - "Qwen3.6 (Vision and MoE)"
+        - "Gemma 4 (omni)"
+        - "Qwen3.5 (Vision)"
         - "Qwen 3 (Vision)"
         - "GPT-OSS (MoE)"
         - "LFM2 (Liquid AI)"
         - "EmbeddingGemma (RAG)"
         - "Whisper (Audio)"
         - "MedGemma (Medical)"
+        - "DeepSeek R-1"
+        - "LLaMA 3.x"
+       
         # - "xLAM-2 (Tool-calling, Salesforce), and their corresponding Chat Templates and major API (e.g., OpenAI-compatible API)"
 
   - type: two_column

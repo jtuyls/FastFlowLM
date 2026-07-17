@@ -10,6 +10,8 @@ sections:
     title: "The fastest, most efficient LLM inference on NPUs"
     body: |
       FastFlowLM (FLM) delivers an Ollama-style developer experience built exclusively for AMD Ryzen™ AI NPUs. Install in seconds, stream tokens instantly, and run context windows up to 256k — all with dramatically better efficiency than GPU-first stacks.
+      
+      FastFlowLM is now part of AMD.
     ctas:
       - label: "Download FastFlowLM (Windows)"
         href: "https://github.com/FastFlowLM/FastFlowLM/releases/latest/download/flm-setup.exe"
@@ -25,9 +27,9 @@ sections:
       - label: "Benchmarks"
         href: "/benchmarks/"
         style: ghost
-      - label: "Demos"
-        href: "/demos/"
-        style: ghost
+      # - label: "Demos"
+      #   href: "/demos/"
+      #   style: ghost
       - label: "Discord"
         href: "https://discord.gg/z24t23HsHF?utm_source=site"
         style: ghost
@@ -51,16 +53,16 @@ sections:
               metrics:
                 - "Over 10× power efficiency"
                 - "256k ctx"
-                - "Vision · Audio · Text"
+                - "Vision · Audio · OMNI · Text"
           - title: "Ollama‑Style Developer Flow"
             description: "Same simple CLI & API patterns you already know — deeply optimized for NPU performance."
             visual:
               type: "code"
               title: "PowerShell"
               content: |
-                flm run llama3.2:1b
+                flm run qwen3.5:4b
                 flm list
-                flm serve llama3.2:1b
+                flm serve qwen3.5:4b
           - title: "Unmatched Performance and Efficiency"
             description: "Ultra‑lightweight runtime with exceptional power efficiency and massive context windows."
             visual:
@@ -83,6 +85,18 @@ sections:
                 - "Reasoning"
                 - "Embeddings"
                 - "MoE Support"
+
+  - type: media
+    variant: alt
+    kicker: "Qwen3.6-MoE on NPU"
+    title: "Qwen3.6-35B-A3B streaming fully on the Ryzen™ AI NPU"
+    media:
+      src: "/assets/qwen3.6-demo.gif"
+      alt: "Qwen3.6-35B-A3B MoE model running locally on the Ryzen AI NPU"
+      href: "https://youtu.be/TT7WZOeqxQY?si=DUpdyw_xNBYfEZNz"
+      kicker: "Qwen3.6-MoE on NPU"
+      body: |
+        The fastest Qwen3.6-35B-A3B MoE implementation on any NPU—built for both Windows and Linux.
 
   - type: media
     variant: alt
