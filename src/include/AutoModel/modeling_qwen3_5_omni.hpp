@@ -46,6 +46,10 @@ public:
     /// \brief insert() followed by generate().
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
 
+    NonStreamResult parse_nstream_content(const std::string response_text);
+    StreamResult parse_stream_content(const std::string content);
+    StreamResult parse_stream_content_final(const std::string content) override;
+
     /// \brief Synthesize speech from the last thinker result (talker path).
     /// \note Talker/codec/WAV-writer are not implemented in the engine yet; this
     ///       surfaces a clear message instead of crashing.
@@ -61,6 +65,8 @@ public:
     std::pair<std::string, std::vector<int>> get_history() override;
 
 private:
+    int think_start_id = 248068;
+    int think_end_id = 248069;
     // thinker-scope multimodal special token ids (from thinker_config)
     static constexpr int image_token_id       = 248056;
     static constexpr int audio_token_id       = 248076;
@@ -134,4 +140,7 @@ private:
     // ----- owned engine (not a causal_lm; inherited lm_engine stays null) -----
     std::unique_ptr<qwen3_5_omni> engine = nullptr;
     qwen3_5_omni_thinker_result_t last_thinker_result;
+
+    StreamResult parse_stream_content_impl(const std::string content, bool is_final);
+
 };
