@@ -69,8 +69,8 @@ int main(int argc, char* argv[]) {
             // uniformed_input.images.push_back("../../../tb_files/google_icon.png");
             // uniformed_input.images.push_back("../../../tb_files/german.png");
         // uniformed_input.images.push_back("../../../tb_files/longImage.jpg");            
-             uniformed_input.prompt = "Is Alibaba a good company?";
-            //uniformed_input.prompt = "Transcribe the following speech segment in its original language. Follow these specific instructions for formatting the answer:\n* Only output the transcription, with no newlines.\n* When transcribing numbers, write the digits, i.e. write 1.7 and not one point seven, and write 3 instead of three.";
+            //uniformed_input.prompt = "Is Alibaba a good company?";
+            uniformed_input.prompt = "Transcribe the following speech segment in its original language. Follow these specific instructions for formatting the answer:\n* Only output the transcription, with no newlines.\n* When transcribing numbers, write the digits, i.e. write 1.7 and not one point seven, and write 3 instead of three.";
             uniformed_input.audios.push_back("../../../tb_files/Demos_sample-data_journal.wav");     
             uniformed_input.audios.push_back("../../../tb_files/nvidia.mp3");   
             uniformed_input.audios.push_back("../../../tb_files/tenyears_00_curry_128kb.mp3");                   
