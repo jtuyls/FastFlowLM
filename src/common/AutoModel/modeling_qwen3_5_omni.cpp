@@ -374,6 +374,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
             }
         }
         if (prefix_skip_count != idx) {
+            // header_print("KV-Cache", "Checkpoint not mathchedm here!");
             prefix_skip_count = 0;
             // this->engine->clear_context();
             // this->checkpoint_his.clear();
@@ -426,24 +427,36 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
             header_print("FLM", "Prompt-cache hit: dropped " << images_to_drop << " cached image(s) from payload");
         }
 
-        // size_t audios_to_drop = 0;
-        // {
-        //     int consumed = 0;
-        //     for (unsigned i = 0; i < audio_payload.num_audios; i++) {
-        //         const int n = static_cast<int>(audio_payload.num_soft_tokens_per_audio[i]);
-        //         // skipped_audio_tokens counts only audio_token_id hits, so compare against n directly
-        //         if (consumed + n <= skipped_audio_tokens) { consumed += n; audios_to_drop++; }
-        //         else break;
-        //     }
-        // }
-        // if (audios_to_drop > 0) {
-        //     drop_front(audio_payload.mel_spectrograms,                 audios_to_drop);
-        //     drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
-        //     drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
-        //     drop_front(audio_payload.num_soft_tokens_per_audio,        audios_to_drop);
-        //     audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
-        //     header_print("FLM", "Prompt-cache hit: dropped " << audios_to_drop << " cached audio(s) from payload");
-        // }
+        // Count complete audio blocks (audio_start..audio_end pairs) that fall
+        // entirely within the cached prefix. Each such pair maps 1:1 to an audio
+        // in the payload. We scan for start/end bracket tokens rather than
+        // audio_token_id because the expanded stream replaces the placeholder with
+        // encoded timestamp+pad tokens — bare audio_token_id never appears there.
+        size_t audios_to_drop = 0;
+        {
+            bool in_audio_block = false;
+            for (size_t i = 0; i < prefix_skip_count; i++) {
+                if (tokens[i] == audio_start_token_id) {
+                    in_audio_block = true;
+                } else if (tokens[i] == audio_end_token_id && in_audio_block) {
+                    in_audio_block = false;
+                    audios_to_drop++;
+                }
+            }
+            // A block still open at the prefix boundary is only partially cached;
+            // do not drop it.
+        }
+        if (audios_to_drop > 0) {
+            // Each audio has its own mel_spectrograms[i] buffer (not a flat concat),
+            // so dropping is a simple front-erase on each per-audio vector.
+            drop_front(audio_payload.mel_spectrograms,                 audios_to_drop);
+            drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
+            drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
+            drop_front(audio_payload.audio_tokens,                     audios_to_drop);
+            audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
+            header_print("FLM", "Prompt-cache hit: dropped " << audios_to_drop << " cached audio(s) from payload");
+        }
+
     }
     const bool has_modal = (image_payload.num_images > 0) || (audio_payload.num_audios > 0);
 
