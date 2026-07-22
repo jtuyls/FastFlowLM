@@ -149,6 +149,7 @@
                     "audio_weight.q4nx"
                 ],
                 "vlm": true,
+                "asr": true,
                 "default_context_length": 32768,
                 "max_prefill_len": 4096,
                 "details": {
