@@ -59,6 +59,11 @@ if(WIN32)
     )
 endif()
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # cl does not enable the conforming preprocessor with /std:c++20.
+    # The engine logging macros use __VA_OPT__.
+    target_compile_options(gemma4e_npu PRIVATE /Zc:preprocessor)
+endif()
 if(NOT MSVC)
     target_compile_options(gemma4e_npu PRIVATE
         -O3 -Wall -fmax-errors=1
