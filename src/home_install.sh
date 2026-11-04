@@ -364,7 +364,6 @@ $XRT_ENV_BLOCK
 
 # 3. Put flm on PATH.
 export PATH="\$FLM_PREFIX/bin:\$PATH"
-export FLM_MODEL_PATH="/scratch/alfxu"
 
 echo "[flm_env] FastFlowLM environment ready (prefix: \$FLM_PREFIX)"
 EOF
