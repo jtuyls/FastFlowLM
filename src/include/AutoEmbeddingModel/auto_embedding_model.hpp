@@ -43,8 +43,6 @@ typedef enum : u8 {
     task_summarization = 9,
 } embedding_task_type_t;
 
-extern std::unordered_set<std::string> embeddingModelTags;
-
 class AutoEmbeddingModel {
 protected:
 	std::string model_path = "";

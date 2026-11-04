@@ -55,7 +55,6 @@ public:
         std::string provider = "builtin");
 
     bool has(const std::string& family) const;
-    bool is_embedding(const std::string& family) const;
     std::unique_ptr<AutoEmbeddingModel> create_embedding(
         const std::string& family, void* device) const;
     std::vector<std::string> available() const;

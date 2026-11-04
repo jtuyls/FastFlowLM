@@ -100,6 +100,8 @@ file(GENERATE
 
 add_executable(test_model_frontend
     test_model_frontend.cpp
+    test_embedding_handler.cpp
+    "${FLM_SOURCE_DIR}/server/embedding_handler.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_frontend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_embedding.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_backend.cpp"
@@ -184,3 +186,14 @@ file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-cata
 target_compile_definitions(test_model_frontend PRIVATE
     FLM_TEST_EMBEDDING_MANIFEST="$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-extension.json")
 add_dependencies(test_model_frontend fake_embedding_extension)
+
+# Exercise the real embedding HTTP handler with a borrowed fake device and no
+# built-in embedding model. This also keeps the limited-model declarations built.
+find_path(CURL_INCLUDE_DIR curl/curl.h
+    HINTS "$ENV{CONDA_PREFIX}/Library/include"
+          "C:/dev/vcpkg/installed/x64-windows/include" REQUIRED)
+target_include_directories(test_model_frontend PRIVATE
+    "${FLM_SOURCE_DIR}/server" "${FLM_SOURCE_DIR}/pull" "${CURL_INCLUDE_DIR}")
+target_compile_definitions(test_model_frontend PRIVATE FASTFLOWLM_LINUX_LIMITED_MODELS)
+find_package(Threads REQUIRED)
+target_link_libraries(test_model_frontend PRIVATE Threads::Threads)

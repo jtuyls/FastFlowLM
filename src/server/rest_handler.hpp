@@ -8,12 +8,13 @@
  */
 #pragma once
 #include <optional>
+#include <mutex>
 
 #include "AutoModel/all_models.hpp"
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "whisper/modeling_whisper.hpp"
-#include "AutoEmbeddingModel/all_embedding_model.hpp"
 #endif
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
 #include "AutoDecisionModel/auto_decision_model.hpp"
 #include "model_list.hpp"
 #include "chat/chat_parser.hpp"
@@ -142,17 +143,16 @@ private:
     std::unique_ptr<AutoDecisionModel> decision_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::unique_ptr<Whisper> whisper_engine;
+#endif
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
     std::string current_embedding_tag;
     std::mutex embedding_mutex;
-#endif
     model_list& supported_models;
     ModelDownloader& downloader;
     std::string current_model_tag;
     std::string default_model_tag;
     bool modelscope;
     bool asr;
-    bool embed;
     /// \brief the prefill chunk length of the loaded model
     int prefill_chunk_len;
     /// \brief the --prefill-chunk-len value, -1 when each model's own is used

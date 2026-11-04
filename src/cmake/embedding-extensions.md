@@ -19,7 +19,11 @@ Load the manifest with `--model-extension`, then serve the embedding tag directl
 or name it in `/v1/embeddings`'s `model` field. String arrays are handled one input
 at a time. `dimensions` is optional; the existing built-in embedding implementation
 continues to use its default dimension. Calls and model switching are serialized.
+Invalid selections and failed downloads leave the current model available. Once
+loading a replacement begins, the old model is released; a failed load leaves
+no model selected, so the next request retries. Errors use HTTP 400 for invalid
+requests and HTTP 500 for download/provider failures.
 
 `src/test/model_frontend/fake_embedding_extension.c` is a complete minimal C
-provider. Its loader/ownership tests and the catalog tests run in the existing
+provider. Its loader/ownership tests, embedding handler tests and catalog tests run in the existing
 `model_extension_contracts` CI suite.

@@ -7,13 +7,6 @@
 
 #include "AutoEmbeddingModel/modeling_gemma_embedding.hpp"
 
-std::unordered_set<std::string> embeddingModelTags = {
-        "embed-gemma", "embed-gemma:300m"
-};
-
-
-
-
 std::string AutoEmbeddingModel::get_current_model() {
     return this->current_model;
 }

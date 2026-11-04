@@ -97,7 +97,6 @@ nlohmann::json ReadJson(const std::filesystem::path& path) {
 void test_embedding_extension() {
     FrontendRegistry registry;
     registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {});
-    TEST_REQUIRE(registry.is_embedding("test-embedding"));
     RequireThrows([&] { registry.create("test-embedding", nullptr); });
     auto model = registry.create_embedding("test-embedding", nullptr);
     std::string text = "hello";
@@ -109,6 +108,8 @@ void test_embedding_extension() {
     TEST_REQUIRE(query == std::vector<float>({5, 1, 0.5f}));
     TEST_REQUIRE(document == std::vector<float>({5, 2}));
     RequireThrows([&] { model->embed(text, task_query, 4); });
+    for (std::string invalid : {"zero-output", "wrong-size"})
+        RequireThrows([&] { model->embed(invalid, task_query, 2); });
     std::string empty;
     RequireThrows([&] { model->embed(empty, task_query); });
     RequireThrows([&] { registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {}); });
@@ -133,6 +134,12 @@ void test_embedding_extension() {
     const auto wrong = WriteManifest(directory, "wrong-kind-extension.json", manifest);
     RequireContains(RequireThrows([&] { registry.load_extension(wrong, {}); }), "model_kind");
     TEST_REQUIRE(!registry.has("test-embedding"));
+    manifest = ReadJson(FLM_TEST_EMBEDDING_MANIFEST);
+    std::filesystem::create_directories(directory / "incomplete");
+    manifest["asset_root"] = "incomplete";
+    const auto incomplete = WriteManifest(directory, "incomplete-extension.json", manifest);
+    registry.load_extension(incomplete, {});
+    RequireContains(RequireThrows([&] { registry.create_embedding("test-embedding", nullptr); }), "incomplete");
 }
 
 void test_register_and_create() {
@@ -730,7 +737,10 @@ void test_manifest_schema_fixtures_match_runtime_contract() {
 
 }  // namespace
 
+void test_embedding_handler();
+
 int main() {
+    RunTest(test_embedding_handler, "embedding request failures and switching");
     RunTest(test_embedding_extension, "embedding provider lifecycle and rollback");
     RunTest(test_register_and_create, "register and create");
     RunTest(test_registration_validation, "registration validation");

@@ -420,11 +420,6 @@ bool FrontendRegistry::has(const std::string& family) const {
     return providers_.count(family) != 0;
 }
 
-bool FrontendRegistry::is_embedding(const std::string& family) const {
-    std::lock_guard lock(mutex_);
-    return embeddings_.count(family) != 0;
-}
-
 std::unique_ptr<AutoEmbeddingModel> FrontendRegistry::create_embedding(
     const std::string& family, void* device) const {
     EmbeddingFactory factory;
