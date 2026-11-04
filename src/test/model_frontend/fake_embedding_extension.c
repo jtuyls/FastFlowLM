@@ -24,7 +24,11 @@ static int Embed(void *object, flm_span_v1 text, flm_span_v1 task, uint32_t dime
     if (dimensions > 3)
         return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
     values[0] = (float)text.size;
-    values[1] = task.size == 8 && !memcmp(task.data, "document", 8) ? 2.0f : 1.0f;
+    if (!task.size) values[1] = 3.0f; /* Deliberately different from query. */
+    else if (task.size == 5 && EndsWith(task, "query")) values[1] = 1.0f;
+    else if (task.size == 8 && EndsWith(task, "document")) values[1] = 2.0f;
+    else if (task.size == 13 && EndsWith(task, "provider-task")) values[1] = 4.0f;
+    else return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
     output->data = text.size == 0 ? NULL : values;
     output->size = dimensions ? dimensions : 3;
     if (EndsWith(text, "zero-output")) output->size = 0;

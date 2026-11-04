@@ -30,19 +30,6 @@
 using json = nlohmann::ordered_json;
 
 
-typedef enum : u8 {
-    task_query = 0,
-    task_document = 1,
-    task_bitextmining = 2,
-    task_clustering = 3,
-    task_classification = 4,
-    task_code_retrieval = 5,
-    task_multilabel_classification = 6,
-    task_sentence_similarity = 7,
-    task_search_result = 8,
-    task_summarization = 9,
-} embedding_task_type_t;
-
 class AutoEmbeddingModel {
 protected:
 	std::string model_path = "";
@@ -80,11 +67,7 @@ public:
 	//************ Unique for each model *************/
 	
 	virtual void load_model(std::string model_path, json model_info, bool enable_preemption) {}
-	virtual std::vector<float> embed(std::string& text, embedding_task_type_t task_type) = 0;
-    virtual std::vector<float> embed(std::string& text, embedding_task_type_t task, uint32_t dimensions) {
-        if (dimensions) throw std::invalid_argument("This embedding model does not support dimensions");
-        return embed(text, task);
-    }
+    // Empty task and zero dimensions select the model's defaults.
+    virtual std::vector<float> embed(std::string& text, const std::string& task = "",
+                                     uint32_t dimensions = 0) = 0;
 };
-
-

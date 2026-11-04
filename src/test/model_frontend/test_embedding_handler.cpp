@@ -58,17 +58,23 @@ void test_embedding_handler() {
     ModelDownloader downloads(models);
     program_args_t args{};
     RestHandler server(models, downloads, args, nullptr);
-    const auto request = [&](const std::string& tag, json input = "hello") {
+    const auto request = [&](const std::string& tag, json input = "hello", json options = json::object()) {
         json response;
-        server.handle_embeddings({{"model", tag}, {"input", input}},
+        options["model"] = tag;
+        options["input"] = input;
+        server.handle_embeddings(options,
             [&](const json& value) { response = value; }, {});
         return response;
     };
     const auto check = [&](const std::string& tag, float marker) {
         const auto response = request(tag);
-        TEST_REQUIRE(response.at("data").at(0).at("embedding") == json({5, 1, marker}));
+        TEST_REQUIRE(response.at("data").at(0).at("embedding") == json({5, 3, marker}));
     };
     check("first:1", 0.5f);
+    TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
+    TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);
+    TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("error").at("code") == 400);
+    check("first", 0.5f);
     check("Ollama/first", 0.5f);
     for (const char* tag : {"missing:1", "incompatible:1", "absent:1", "Ollama/absent", "generation:1"}) {
         const auto error = request(tag).at("error");

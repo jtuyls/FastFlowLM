@@ -9,6 +9,9 @@ namespace {
 using namespace flm::extension::detail;
 
 void Check(int status, const ErrorCapture &error) {
+    if (status == FLM_MODEL_EXTENSION_STATUS_INVALID_ARGUMENT ||
+        status == FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED)
+        throw std::invalid_argument("Embedding provider: " + error.message);
     if (status != FLM_MODEL_EXTENSION_STATUS_OK)
         throw std::runtime_error("Embedding provider: " + error.message);
 }
@@ -31,29 +34,14 @@ class ExtensionEmbeddingModel final : public AutoEmbeddingModel {
         model_path = std::move(path);
         is_model_loaded = true;
     }
-    std::vector<float> embed(std::string &text, embedding_task_type_t task) override {
-        return embed(text, task, 0);
-    }
-    std::vector<float> embed(std::string &text, embedding_task_type_t task,
+    std::vector<float> embed(std::string &text, const std::string &task,
                              uint32_t dimensions) override {
         if (!is_model_loaded)
             throw std::runtime_error("Embedding model is not loaded");
-        static const char *tasks[] = {"query",
-                                      "document",
-                                      "BitextMining",
-                                      "Clustering",
-                                      "Classification",
-                                      "CodeRetrieval",
-                                      "MultilabelClassification",
-                                      "SentenceSimilarity",
-                                      "Retrieval",
-                                      "Summarization"};
-        if (static_cast<size_t>(task) >= std::size(tasks))
-            throw std::invalid_argument("Unknown embedding task");
         flm_f32_view_v1 output{};
         ErrorCapture error;
         auto sink = error.sink();
-        Check(api_.embed(api_.object, span(text), span(tasks[task]), dimensions,
+        Check(api_.embed(api_.object, span(text), span(task), dimensions,
                          &output, &sink),
               error);
         if (!output.data || !output.size || (dimensions && output.size != dimensions))

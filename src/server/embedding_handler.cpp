@@ -60,6 +60,7 @@ void RestHandler::handle_embeddings(const json& request,
         if (inputs.empty())
             throw std::invalid_argument("input must be a string or a non-empty array of strings");
 
+        const std::string task = request.value("task", std::string());
         uint32_t dimensions = 0;
         if (request.contains("dimensions")) {
             if (!request["dimensions"].is_number_integer() || request["dimensions"].get<int64_t>() <= 0 ||
@@ -71,7 +72,7 @@ void RestHandler::handle_embeddings(const json& request,
         json embedding_data = json::array();
         for (size_t i = 0; i < inputs.size(); ++i) {
             std::cout << "Embedding input[" << i << "]: " << "\n" << inputs[i] << std::endl;
-            std::vector<float> embedding_result = this->auto_embedding_engine->embed(inputs[i], embedding_task_type_t::task_query, dimensions);
+            std::vector<float> embedding_result = this->auto_embedding_engine->embed(inputs[i], task, dimensions);
             embedding_data.push_back({
                 {"object", "embedding"},
                 {"embedding", embedding_result},

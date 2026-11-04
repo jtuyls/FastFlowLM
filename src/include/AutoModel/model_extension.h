@@ -454,9 +454,7 @@ typedef struct flm_f32_view_v1 {
 ///       Legacy entries default to model_kind="generation".
 /// \note All callbacks are required and must contain exceptions. Calls on one
 ///       instance are serialized. Spans are borrowed during the callback only.
-///       task is one of "query", "document", "BitextMining", "Clustering",
-///       "Classification", "CodeRetrieval", "MultilabelClassification",
-///       "SentenceSimilarity", "Retrieval", "Summarization" (UTF-8).
+///       task is a provider-defined UTF-8 name; an empty span requests its default.
 ///       dimensions == 0 requests the default. Unsupported tasks/dimensions fail.
 ///       The factory receives host capacity in struct_size and returns its size.
 typedef struct flm_embedding_model_v1 {
