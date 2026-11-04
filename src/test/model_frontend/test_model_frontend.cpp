@@ -119,6 +119,20 @@ void test_embedding_extension() {
     model.reset();
     RequireThrows([&] { registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {"test-embedding:1"}); });
     TEST_REQUIRE(!registry.has("test-embedding"));
+    const auto directory = std::filesystem::path(FLM_TEST_EMBEDDING_MANIFEST).parent_path();
+    auto manifest = ReadJson(FLM_TEST_EMBEDDING_MANIFEST);
+    auto catalog = ReadJson(directory / "embedding-catalog.json");
+    auto& entry = catalog["models"]["test-embedding"]["1"];
+    entry["model_kind"] = "generation";
+    entry["backend"] = "flm";
+    entry["backend_provider"] = "builtin";
+    entry["default_context_length"] = 32;
+    entry["max_prefill_len"] = 32;
+    WriteManifest(directory, "wrong-kind-catalog.json", catalog);
+    manifest["catalog"] = "wrong-kind-catalog.json";
+    const auto wrong = WriteManifest(directory, "wrong-kind-extension.json", manifest);
+    RequireContains(RequireThrows([&] { registry.load_extension(wrong, {}); }), "model_kind");
+    TEST_REQUIRE(!registry.has("test-embedding"));
 }
 
 void test_register_and_create() {
