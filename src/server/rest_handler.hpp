@@ -143,6 +143,8 @@ private:
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::unique_ptr<Whisper> whisper_engine;
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
+    std::string current_embedding_tag;
+    std::mutex embedding_mutex;
 #endif
     model_list& supported_models;
     ModelDownloader& downloader;

@@ -1,6 +1,7 @@
 /// \file test_model_frontend.cpp
 /// \brief Hardware-free frontend registry and C loader tests
 #include "AutoModel/model_backend.hpp"
+#include "AutoEmbeddingModel/auto_embedding_model.hpp"
 #include "AutoModel/model_extension_frontend.hpp"
 #include "AutoModel/model_frontend.hpp"
 #include "../phi4_core/test_support.hpp"
@@ -19,6 +20,10 @@
 #ifndef FLM_TEST_INCOMPATIBLE_EXTENSION_PATH
 #error FLM_TEST_INCOMPATIBLE_EXTENSION_PATH must name the incompatible library
 #endif
+
+// Embedding adapters never allocate these built-in weight/tokenizer objects.
+Tokenizer::~Tokenizer() = default;
+SafeTensors::~SafeTensors() = default;
 
 namespace flm::frontend {
 void register_builtin_frontends(FrontendRegistry&) {}
@@ -87,6 +92,33 @@ nlohmann::json ReadJson(const std::filesystem::path& path) {
     std::ifstream stream(path);
     TEST_REQUIRE(stream.is_open());
     return nlohmann::json::parse(stream);
+}
+
+void test_embedding_extension() {
+    FrontendRegistry registry;
+    registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {});
+    TEST_REQUIRE(registry.is_embedding("test-embedding"));
+    RequireThrows([&] { registry.create("test-embedding", nullptr); });
+    auto model = registry.create_embedding("test-embedding", nullptr);
+    std::string text = "hello";
+    RequireThrows([&] { model->embed(text, task_query); });
+    RequireThrows([&] { model->load_model("/weights", {}, true); });
+    model->load_model("/weights", {}, false);
+    auto query = model->embed(text, task_query);
+    auto document = model->embed(text, task_document, 2);
+    TEST_REQUIRE(query == std::vector<float>({5, 1, 0.5f}));
+    TEST_REQUIRE(document == std::vector<float>({5, 2}));
+    RequireThrows([&] { model->embed(text, task_query, 4); });
+    std::string empty;
+    RequireThrows([&] { model->embed(empty, task_query); });
+    RequireThrows([&] { registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {}); });
+    TEST_REQUIRE(registry.catalog_overlays().size() == 1);
+    registry.unload_extensions();
+    TEST_REQUIRE(!registry.has("test-embedding"));
+    TEST_REQUIRE(model->embed(text, task_query) == query);
+    model.reset();
+    RequireThrows([&] { registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {"test-embedding:1"}); });
+    TEST_REQUIRE(!registry.has("test-embedding"));
 }
 
 void test_register_and_create() {
@@ -685,6 +717,7 @@ void test_manifest_schema_fixtures_match_runtime_contract() {
 }  // namespace
 
 int main() {
+    RunTest(test_embedding_extension, "embedding provider lifecycle and rollback");
     RunTest(test_register_and_create, "register and create");
     RunTest(test_registration_validation, "registration validation");
     RunTest(test_real_shared_library_loads_through_c_boundary,

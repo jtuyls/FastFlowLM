@@ -69,7 +69,8 @@ public:
 	//************ Shared by all models *************/
 	virtual ~AutoEmbeddingModel() = default;
 
-	AutoEmbeddingModel(flm_rt::device* npu_device_inst, std::string current_model = "");
+	AutoEmbeddingModel(flm_rt::device* device, std::string name = "")
+        : current_model(std::move(name)), npu_device_inst(device) {}
 	/// \brief Get the current model
 	/// \return the current model
 	std::string get_current_model();
@@ -82,6 +83,10 @@ public:
 	
 	virtual void load_model(std::string model_path, json model_info, bool enable_preemption) {}
 	virtual std::vector<float> embed(std::string& text, embedding_task_type_t task_type) = 0;
+    virtual std::vector<float> embed(std::string& text, embedding_task_type_t task, uint32_t dimensions) {
+        if (dimensions) throw std::invalid_argument("This embedding model does not support dimensions");
+        return embed(text, task);
+    }
 };
 
 
