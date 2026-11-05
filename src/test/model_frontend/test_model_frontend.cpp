@@ -1,6 +1,7 @@
 /// \file test_model_frontend.cpp
 /// \brief Hardware-free frontend registry and C loader tests
 #include "AutoModel/model_backend.hpp"
+#include "AutoEmbeddingModel/auto_embedding_model.hpp"
 #include "AutoModel/model_extension_frontend.hpp"
 #include "AutoModel/model_frontend.hpp"
 #include "../phi4_core/test_support.hpp"
@@ -19,6 +20,10 @@
 #ifndef FLM_TEST_INCOMPATIBLE_EXTENSION_PATH
 #error FLM_TEST_INCOMPATIBLE_EXTENSION_PATH must name the incompatible library
 #endif
+
+// Embedding adapters never allocate these built-in weight/tokenizer objects.
+Tokenizer::~Tokenizer() = default;
+SafeTensors::~SafeTensors() = default;
 
 namespace flm::frontend {
 void register_builtin_frontends(FrontendRegistry&) {}
@@ -85,6 +90,57 @@ nlohmann::json ReadJson(const std::filesystem::path& path) {
     std::ifstream stream(path);
     TEST_REQUIRE(stream.is_open());
     return nlohmann::json::parse(stream);
+}
+
+void test_embedding_extension() {
+    FrontendRegistry registry;
+    registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {});
+    RequireThrows([&] { registry.create("test-embedding", nullptr); });
+    auto model = registry.create_embedding("test-embedding", nullptr);
+    std::string text = "hello";
+    RequireThrows([&] { model->embed(text, "query"); });
+    RequireThrows([&] { model->load_model("/weights", {}, true); });
+    model->load_model("/weights", {}, false);
+    TEST_REQUIRE(model->embed(text) == std::vector<float>({5, 3, 0.5f}));
+    TEST_REQUIRE(model->embed(text, "provider-task") == std::vector<float>({5, 4, 0.5f}));
+    RequireThrows([&] { model->embed(text, "unknown"); });
+    auto query = model->embed(text, "query");
+    auto document = model->embed(text, "document", 2);
+    TEST_REQUIRE(query == std::vector<float>({5, 1, 0.5f}));
+    TEST_REQUIRE(document == std::vector<float>({5, 2}));
+    RequireThrows([&] { model->embed(text, "query", 4); });
+    for (std::string invalid : {"zero-output", "wrong-size"})
+        RequireThrows([&] { model->embed(invalid, "query", 2); });
+    std::string empty;
+    RequireThrows([&] { model->embed(empty, "query"); });
+    RequireThrows([&] { registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {}); });
+    TEST_REQUIRE(registry.catalog_overlays().size() == 1);
+    registry.unload_extensions();
+    TEST_REQUIRE(!registry.has("test-embedding"));
+    TEST_REQUIRE(model->embed(text, "query") == query);
+    model.reset();
+    RequireThrows([&] { registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {"test-embedding:1"}); });
+    TEST_REQUIRE(!registry.has("test-embedding"));
+    const auto directory = std::filesystem::path(FLM_TEST_EMBEDDING_MANIFEST).parent_path();
+    auto manifest = ReadJson(FLM_TEST_EMBEDDING_MANIFEST);
+    auto catalog = ReadJson(directory / "embedding-catalog.json");
+    auto& entry = catalog["models"]["test-embedding"]["1"];
+    entry["model_kind"] = "generation";
+    entry["backend"] = "flm";
+    entry["backend_provider"] = "builtin";
+    entry["default_context_length"] = 32;
+    entry["max_prefill_len"] = 32;
+    WriteManifest(directory, "wrong-kind-catalog.json", catalog);
+    manifest["catalog"] = "wrong-kind-catalog.json";
+    const auto wrong = WriteManifest(directory, "wrong-kind-extension.json", manifest);
+    RequireContains(RequireThrows([&] { registry.load_extension(wrong, {}); }), "model_kind");
+    TEST_REQUIRE(!registry.has("test-embedding"));
+    manifest = ReadJson(FLM_TEST_EMBEDDING_MANIFEST);
+    std::filesystem::create_directories(directory / "incomplete");
+    manifest["asset_root"] = "incomplete";
+    const auto incomplete = WriteManifest(directory, "incomplete-extension.json", manifest);
+    registry.load_extension(incomplete, {});
+    RequireContains(RequireThrows([&] { registry.create_embedding("test-embedding", nullptr); }), "incomplete");
 }
 
 void test_register_and_create() {
@@ -631,7 +687,11 @@ void test_manifest_schema_fixtures_match_runtime_contract() {
 
 }  // namespace
 
+void test_embedding_handler();
+
 int main() {
+    RunTest(test_embedding_handler, "embedding request failures and switching");
+    RunTest(test_embedding_extension, "embedding provider lifecycle and rollback");
     RunTest(test_register_and_create, "register and create");
     RunTest(test_registration_validation, "registration validation");
     RunTest(test_real_shared_library_loads_through_c_boundary,

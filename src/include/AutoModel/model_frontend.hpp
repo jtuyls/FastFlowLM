@@ -14,6 +14,7 @@
 #include <vector>
 
 class AutoModel;
+class AutoEmbeddingModel;
 
 namespace flm::frontend {
 
@@ -28,6 +29,8 @@ struct FrontendDeleter {
 
 using FrontendPtr = std::unique_ptr<AutoModel, FrontendDeleter>;
 using FrontendFactory = std::function<FrontendPtr(void* device)>;
+
+using EmbeddingFactory = std::function<std::unique_ptr<AutoEmbeddingModel>(void*)>;
 
 /// \brief Make a host-owned frontend use the registry's ownership shape.
 FrontendPtr own_frontend(std::unique_ptr<AutoModel> frontend);
@@ -51,6 +54,8 @@ public:
         std::string provider = "builtin");
 
     bool has(const std::string& family) const;
+    std::unique_ptr<AutoEmbeddingModel> create_embedding(
+        const std::string& family, void* device) const;
     std::vector<std::string> available() const;
 
     /// \brief Construct a frontend.
@@ -81,6 +86,7 @@ private:
 
     mutable std::mutex mutex_;
     std::map<std::string, FrontendFactory> factories_;
+    std::map<std::string, EmbeddingFactory> embeddings_;
     std::map<std::string, std::string> providers_;
     std::vector<std::shared_ptr<LoadedExtension>> extensions_;
 };

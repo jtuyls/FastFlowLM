@@ -746,6 +746,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check" || parsed_args.command == "bench") {
+        parsed_args.model_tag = availble_models.rectify_model_tag(parsed_args.model_tag);
       if (parsed_args.model_tag != "model-faker" && (!availble_models.is_model_supported(parsed_args.model_tag))) {
             header_print("ERROR", "Model not found: " << parsed_args.model_tag << "; Please check with `flm list` and try again.");
             return 1;

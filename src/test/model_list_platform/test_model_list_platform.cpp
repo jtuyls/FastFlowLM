@@ -66,6 +66,27 @@ nlohmann::json WithDownloadMetadata(nlohmann::json entry) {
     return entry;
 }
 
+void test_embedding_catalog() {
+    auto entry = WithDownloadMetadata({{"name", "Embedding"}, {"model_kind", "embedding"},
+        {"frontend_provider", "embedding-provider"}, {"supported_platforms", {"aie2p"}},
+        {"details", {{"family", "embedding-family"}}}});
+    auto path = write_catalog("embedding-overlay.json", {{"schema_version", 1},
+        {"models", {{"embedding-test", {{"1", entry}}}}}});
+    auto overlay = flm::catalog::load_model_catalog_overlay(path.string());
+    std::string base = kCatalogPath, directory = ".";
+    model_list models(base, directory, "aie2p", {"flm"}, {overlay}, {"embedding-family"});
+    TEST_REQUIRE(models.is_model_supported("embedding-test:1"));
+    TEST_REQUIRE(models.get_model_info("embedding-test:1").second.at("model_kind") == "embedding");
+    model_list other(base, directory, "dev04", {"flm"}, {overlay}, {"embedding-family"});
+    TEST_REQUIRE(!other.is_model_supported("embedding-test:1"));
+    RequireThrows([&] { model_list missing(base, directory, "aie2p", {"flm"}, {overlay}, {}); });
+    entry["model_kind"] = "unknown";
+    write_catalog("embedding-overlay.json", {{"schema_version", 1},
+        {"models", {{"embedding-test", {{"1", entry}}}}}});
+    RequireThrows([&] { flm::catalog::load_model_catalog_overlay(path.string()); });
+    std::filesystem::remove(path);
+}
+
 void test_stock_build_offers_phi4_with_its_own_artifacts() {
     // The regression this design exists to prevent. A stock install has one
     // phi4 -- the FastFlowLM one -- and nothing about a corelib model may
@@ -410,9 +431,7 @@ void test_extension_catalogs_merge_without_overrides() {
     TEST_REQUIRE(
         model_entry.at("required") ==
         nlohmann::json::array(
-            {"name", "backend", "backend_provider",
-             "default_context_length", "max_prefill_len", "details",
-             "url", "flm_min_version", "files"}));
+            {"name", "details", "url", "flm_min_version", "files"}));
     TEST_REQUIRE(
         model_entry.at("properties")
             .at("details")
@@ -668,6 +687,7 @@ void test_shipped_catalog_is_well_formed() {
 }  // namespace
 
 int main() {
+    RunTest(test_embedding_catalog, "embedding catalog and platform filtering");
     RunTest(test_stock_build_offers_phi4_with_its_own_artifacts,
             "stock build offers phi4 with its own artifacts");
     RunTest(test_a_corelib_build_offers_the_corelib_phi4,

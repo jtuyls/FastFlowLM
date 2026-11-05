@@ -81,9 +81,28 @@ file(GENERATE
     OUTPUT "$<TARGET_FILE_DIR:fake_model_extension>/fake-model-catalog.json"
     CONTENT "{\n  \"schema_version\": 1,\n  \"models\": {\n    \"plugin-model\": {\n      \"1b\": {\n        \"name\": \"Plugin model\",\n        \"url\": \"https://huggingface.co/FastFlowLM/Plugin-Model\",\n        \"flm_min_version\": \"1.0.0\",\n        \"files\": [\"config.json\"],\n        \"supported_platforms\": [\"aie2p\"],\n        \"backend\": \"flm\",\n        \"backend_provider\": \"plugin-provider\",\n        \"default_context_length\": 4096,\n        \"max_prefill_len\": 512,\n        \"details\": {\"family\": \"plugin-test\"}\n      }\n    }\n  }\n}\n")
 
+# Compile the real embedding methods with the hardware-free fixtures below.
+# Keep their implementation in rest_handler.cpp alongside the generation handlers.
+set(rest_handler_source "${FLM_SOURCE_DIR}/server/rest_handler.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${rest_handler_source}")
+file(READ "${rest_handler_source}" rest_handler)
+set(embedding_handler "#include \"rest_handler.hpp\"\n")
+foreach(method ensure_embed_model_loaded handle_embeddings)
+    string(FIND "${rest_handler}" "void RestHandler::${method}(" start)
+    string(SUBSTRING "${rest_handler}" ${start} -1 body)
+    string(FIND "${body}" "\n}\n" end)
+    math(EXPR length "${end} + 3")
+    string(SUBSTRING "${body}" 0 ${length} body)
+    string(APPEND embedding_handler "${body}\n")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/embedding_handler.cpp" "${embedding_handler}")
+
 add_executable(test_model_frontend
     test_model_frontend.cpp
+    test_embedding_handler.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/embedding_handler.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_frontend.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/model_extension_embedding.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp")
 
@@ -97,6 +116,7 @@ add_executable(test_model_extension_frontend
     "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_frontend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_frontend.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/model_extension_embedding.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
     "${FLM_SOURCE_DIR}/common/modules/sampler.cpp"
@@ -150,3 +170,25 @@ enable_testing()
 add_test(NAME test_model_frontend COMMAND test_model_frontend)
 add_test(NAME test_model_extension_frontend
     COMMAND test_model_extension_frontend)
+
+add_library(fake_embedding_extension SHARED fake_embedding_extension.c)
+target_link_libraries(fake_embedding_extension PRIVATE flm_model_extension_contract)
+target_compile_definitions(fake_embedding_extension PRIVATE FLM_TEST_NPU_RUNTIME=${FLM_TEST_NPU_RUNTIME})
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-extension.json"
+    CONTENT "{\"schema_version\":1,\"name\":\"test-embedding\",\"version\":\"1\",\"library\":\"$<TARGET_FILE_NAME:fake_embedding_extension>\",\"catalog\":\"embedding-catalog.json\"}")
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-catalog.json"
+    CONTENT "{\"schema_version\":1,\"models\":{\"test-embedding\":{\"1\":{\"name\":\"embedding\",\"url\":\"https://example.com/model\",\"files\":[\"config.json\"],\"flm_min_version\":\"1.0.0\",\"model_kind\":\"embedding\",\"frontend_provider\":\"test-embedding\",\"details\":{\"family\":\"test-embedding\"}}}}}")
+target_compile_definitions(test_model_frontend PRIVATE
+    FLM_TEST_EMBEDDING_MANIFEST="$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-extension.json")
+add_dependencies(test_model_frontend fake_embedding_extension)
+
+# Exercise the real embedding HTTP handler with a borrowed fake device and no
+# built-in embedding model. This also keeps the limited-model declarations built.
+find_path(CURL_INCLUDE_DIR curl/curl.h
+    HINTS "$ENV{CONDA_PREFIX}/Library/include"
+          "C:/dev/vcpkg/installed/x64-windows/include" REQUIRED)
+target_include_directories(test_model_frontend PRIVATE
+    "${FLM_SOURCE_DIR}/server" "${FLM_SOURCE_DIR}/pull" "${CURL_INCLUDE_DIR}")
+target_compile_definitions(test_model_frontend PRIVATE FASTFLOWLM_LINUX_LIMITED_MODELS)
+find_package(Threads REQUIRED)
+target_link_libraries(test_model_frontend PRIVATE Threads::Threads)

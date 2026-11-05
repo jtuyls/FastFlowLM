@@ -442,6 +442,40 @@ typedef int (*flm_frontend_create_v1)(
     flm_model_frontend_v1* frontend,
     const flm_error_sink_v1* error);
 
+/// \brief Provider-owned float32 embedding, valid until the next call or destruction.
+typedef struct flm_f32_view_v1 {
+    const float* data;
+    size_t size;
+} flm_f32_view_v1;
+
+/// \brief Complete embedding model: the provider owns preprocessing and inference.
+/// \note Catalog entries use model_kind="embedding", details.family and
+///       frontend_provider. They need no causal backend or generation limits.
+///       Legacy entries default to model_kind="generation".
+/// \note All callbacks are required and must contain exceptions. Calls on one
+///       instance are serialized. Spans are borrowed during the callback only.
+///       task is a provider-defined UTF-8 name; an empty span requests its default.
+///       dimensions == 0 requests the default. Unsupported tasks/dimensions fail.
+///       The factory receives host capacity in struct_size and returns its size.
+typedef struct flm_embedding_model_v1 {
+    size_t struct_size;
+    void* object;
+    void (*destroy)(void* object);
+    int (*load)(void* object, flm_span_v1 model_path, flm_span_v1 model_info_json,
+                uint32_t enable_preemption, const flm_error_sink_v1* error);
+    int (*embed)(void* object, flm_span_v1 text, flm_span_v1 task,
+                 uint32_t dimensions, flm_f32_view_v1* output,
+                 const flm_error_sink_v1* error);
+} flm_embedding_model_v1;
+
+#define FLM_EMBEDDING_MODEL_V1_MIN_SIZE \
+    (offsetof(flm_embedding_model_v1, embed) + \
+     sizeof(((flm_embedding_model_v1*)0)->embed))
+
+typedef int (*flm_embedding_create_v1)(
+    void* factory_context, const flm_frontend_create_context_v1* context,
+    flm_embedding_model_v1* model, const flm_error_sink_v1* error);
+
 /// \brief Host callbacks available while an extension registers.
 /// \note The registrar and its host context are valid only for the duration of
 ///       the `register_extension` call.
@@ -464,6 +498,10 @@ typedef struct flm_model_extension_registrar_v1 {
     int (*register_frontend_provider)(
         void* host_context, const char* family, const char* provider,
         flm_frontend_create_v1 create, void* factory_context);
+    /// Complete embedding models share frontend registration and bundle lifetime.
+    int (*register_embedding_provider)(
+        void* host_context, const char* family, const char* provider,
+        flm_embedding_create_v1 create, void* factory_context);
 } flm_model_extension_registrar_v1;
 
 #define FLM_MODEL_EXTENSION_REGISTRAR_V1_MIN_SIZE \
@@ -475,6 +513,10 @@ typedef struct flm_model_extension_registrar_v1 {
     (offsetof(flm_model_extension_registrar_v1, register_frontend_provider) + \
      sizeof(((flm_model_extension_registrar_v1*)0) \
                 ->register_frontend_provider))
+
+#define FLM_MODEL_EXTENSION_REGISTRAR_V1_EMBEDDING_SIZE \
+    (offsetof(flm_model_extension_registrar_v1, register_embedding_provider) + \
+     sizeof(((flm_model_extension_registrar_v1*)0)->register_embedding_provider))
 
 /// \brief Description returned by `flm_model_extension_query_v1`.
 /// \note `name` and `version` are null-terminated UTF-8 strings. They and this
