@@ -119,7 +119,7 @@ add_executable(test_model_frontend
     test_embedding_handler.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/embedding_handler.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_frontend.cpp"
-    "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_embedding.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/model_extension_embedding.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp")
 
@@ -133,7 +133,7 @@ add_executable(test_model_extension_frontend
     "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_frontend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_frontend.cpp"
-    "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_embedding.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/model_extension_embedding.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
     "${FLM_SOURCE_DIR}/common/modules/sampler.cpp"

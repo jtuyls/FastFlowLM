@@ -2,7 +2,7 @@
 /// \brief Adapt complete embedding providers to AutoEmbeddingModel.
 #include "AutoEmbeddingModel/auto_embedding_model.hpp"
 #include "AutoModel/model_extension_frontend.hpp"
-#include "model_extension_detail.hpp"
+#include "../AutoModel/model_extension_detail.hpp"
 
 namespace flm::frontend {
 namespace {
