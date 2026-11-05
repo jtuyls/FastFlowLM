@@ -35,15 +35,14 @@ class ExtensionEmbeddingModel final : public AutoEmbeddingModel {
         is_model_loaded = true;
     }
     std::vector<float> embed(std::string &text, const std::string &task,
-                             uint32_t dimensions) override {
+                            uint32_t dimensions) override {
         if (!is_model_loaded)
             throw std::runtime_error("Embedding model is not loaded");
         flm_f32_view_v1 output{};
         ErrorCapture error;
         auto sink = error.sink();
         Check(api_.embed(api_.object, span(text), span(task), dimensions,
-                         &output, &sink),
-              error);
+                         &output, &sink), error);
         if (!output.data || !output.size || (dimensions && output.size != dimensions))
             throw std::runtime_error(
                 "Embedding provider returned invalid dimensions or data");
@@ -72,16 +71,15 @@ make_extension_embedding_factory(ExtensionFrontendRegistration registration,
         ErrorCapture error;
         auto sink = error.sink();
         try {
-            Check(registration.create_embedding(registration.factory_context, &context,
-                                                &instance, &sink),
-                  error);
+            Check(registration.create_embedding(registration.factory_context,
+                                                &context, &instance, &sink), error);
             if (instance.struct_size < FLM_EMBEDDING_MODEL_V1_MIN_SIZE ||
                 !instance.object || !instance.destroy || !instance.load ||
                 !instance.embed)
                 throw std::runtime_error(
                     "Embedding factory returned an incomplete model");
             return std::make_unique<ExtensionEmbeddingModel>(device, instance,
-                                                             lifetime);
+                                                            lifetime);
         } catch (...) {
             destroy_provider_object(instance.destroy, instance.object);
             throw;

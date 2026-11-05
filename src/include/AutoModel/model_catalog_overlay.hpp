@@ -191,10 +191,6 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
     const auto kind = model_kind(entry);
     if (kind != kGenerationModelKind && kind != kEmbeddingModelKind)
         throw std::runtime_error("Unknown model_kind for '" + tag + "'");
-    if (kind == kEmbeddingModelKind &&
-        (!entry.contains("frontend_provider") || !entry["frontend_provider"].is_string() ||
-         entry["frontend_provider"].get<std::string>().empty()))
-        throw std::runtime_error("Embedding entry must name frontend_provider: " + tag);
     if (entry.contains("file_records") &&
         (!entry["file_records"].is_array() || entry["file_records"].empty()))
         throw std::runtime_error("file_records must be a non-empty array: " + tag);
@@ -279,14 +275,14 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
             }
         }
     }
-    if ((entry.value("vlm", false) ||
+    if ((kind == kEmbeddingModelKind || entry.value("vlm", false) ||
          entry.value("asr", false)) &&
         (!entry.contains("frontend_provider") ||
          !entry["frontend_provider"].is_string() ||
          entry["frontend_provider"]
              .get_ref<const std::string&>().empty())) {
         throw std::runtime_error(
-            "Multimodal model extension catalog entry '" + tag +
+            "Model extension catalog entry '" + tag +
             "' must name a frontend_provider");
     }
 }
