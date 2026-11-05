@@ -786,7 +786,7 @@ void FrontendRegistry::load_extension(
                     for (const auto& pending : registration.pending_frontends) {
                         if (pending.family == family) embedding = pending.create_embedding != nullptr;
                     }
-                    if (embedding != (flm::catalog::model_kind(entry) == "embedding")) {
+                    if (embedding != (flm::catalog::model_kind(entry) == flm::catalog::kEmbeddingModelKind)) {
                         throw std::runtime_error("Catalog model_kind does not match frontend '" + family + "'");
                     }
                     auto selected = providers_.find(family);

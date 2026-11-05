@@ -17,9 +17,12 @@
 
 namespace flm::catalog {
 
+inline constexpr const char* kGenerationModelKind = "generation";
+inline constexpr const char* kEmbeddingModelKind = "embedding";
+
 /// \brief Read a model's kind; catalogs without it describe generation models.
 inline std::string model_kind(const nlohmann::json& info) {
-    return info.value("model_kind", "generation");
+    return info.value("model_kind", kGenerationModelKind);
 }
 
 struct ModelCatalogOverlay {
@@ -164,7 +167,7 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
     if (!entry.is_object() || !entry.contains("name") ||
         !entry["name"].is_string() ||
         entry["name"].get_ref<const std::string&>().empty() ||
-        (model_kind(entry) != "embedding" && (
+        (model_kind(entry) != kEmbeddingModelKind && (
         !entry.contains(backend::kBackendKey) ||
         !entry.contains(backend::kBackendProviderKey) ||
         !entry.contains("default_context_length") ||
@@ -186,9 +189,9 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
             "max_prefill_len, and details.family");
     }
     const auto kind = model_kind(entry);
-    if (kind != "generation" && kind != "embedding")
+    if (kind != kGenerationModelKind && kind != kEmbeddingModelKind)
         throw std::runtime_error("Unknown model_kind for '" + tag + "'");
-    if (kind == "embedding" &&
+    if (kind == kEmbeddingModelKind &&
         (!entry.contains("frontend_provider") || !entry["frontend_provider"].is_string() ||
          entry["frontend_provider"].get<std::string>().empty()))
         throw std::runtime_error("Embedding entry must name frontend_provider: " + tag);
@@ -429,7 +432,7 @@ inline void validate_model_catalog_overlay(
                         "' names unregistered frontend family '" +
                         family + "'");
                 }
-                if (model_kind(source) == "embedding") continue;
+                if (model_kind(source) == kEmbeddingModelKind) continue;
                 const std::string selected_backend =
                     source.at(backend::kBackendKey).get<std::string>();
                 const std::string provider =
