@@ -18,7 +18,6 @@ void Gemma_Embedding::load_model(std::string model_path, json model_info, bool e
 }
 
 std::vector<float> Gemma_Embedding::embed(std::string& text, const std::string& task, uint32_t dimensions) {
-    if (dimensions) throw std::invalid_argument("This embedding model does not support dimensions");
     std::string task_prefix = this->_get_task_prefix(task);
     std::string full_text = "<bos>" + task_prefix + text + "<eos>";
     std::vector<int> tokens = this->tokenizer->encode(full_text);
@@ -29,6 +28,8 @@ std::vector<float> Gemma_Embedding::embed(std::string& text, const std::string& 
     }
     
     buffer<bf16> y = this->embedding_model_impl->embed(tokens);
+    if (dimensions && dimensions != y.size())
+        throw std::invalid_argument("This embedding implementation only supports " + std::to_string(y.size()) + " dimensions");
     std::vector<float> result(y.size());
     for (int i = 0; i < y.size(); i++) {
         result[i] = static_cast<float>(y[i]);
