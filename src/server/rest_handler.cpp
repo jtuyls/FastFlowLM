@@ -1368,7 +1368,9 @@ void RestHandler::handle_embeddings(const json& request,
     catch (const std::exception& e) {
         const int code = dynamic_cast<const std::invalid_argument*>(&e) ||
                          dynamic_cast<const nlohmann::json::exception*>(&e) ? 400 : 500;
-        send_response({{"error", {{"message", e.what()}, {"code", code}}}});
+        send_response({{"error", {{"message", e.what()},
+                                  {"type", code == 400 ? "invalid_request_error" : "server_error"},
+                                  {"code", code}}}});
     }
 }
 

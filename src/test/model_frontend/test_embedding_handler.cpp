@@ -79,6 +79,7 @@ void test_embedding_handler() {
     for (const char* tag : {"missing:1", "incompatible:1", "absent:1", "Ollama/absent", "generation:1"}) {
         const auto error = request(tag).at("error");
         TEST_REQUIRE(error.at("code") == (std::string(tag) == "missing:1" ? 500 : 400));
+        TEST_REQUIRE(error.at("type") == (std::string(tag) == "missing:1" ? "server_error" : "invalid_request_error"));
         check("first", 0.5f);
     }
     TEST_REQUIRE(pulls == 1);
