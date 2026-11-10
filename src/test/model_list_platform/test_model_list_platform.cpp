@@ -80,10 +80,21 @@ void test_embedding_catalog() {
     model_list other(base, directory, "dev04", {"flm"}, {overlay}, {"embedding-family"});
     TEST_REQUIRE(!other.is_model_supported("embedding-test:1"));
     RequireThrows([&] { model_list missing(base, directory, "aie2p", {"flm"}, {overlay}, {}); });
-    entry["model_kind"] = "unknown";
-    write_catalog("embedding-overlay.json", {{"schema_version", 1},
-        {"models", {{"embedding-test", {{"1", entry}}}}}});
-    RequireThrows([&] { flm::catalog::load_model_catalog_overlay(path.string()); });
+    // Embeddings and their preferred sources obey the shared catalog rules.
+    for (const auto& patch : std::vector<nlohmann::json>{
+             {{"model_kind", "unknown"}}, {{"frontend_provider", nullptr}},
+             {{"file_records", nlohmann::json::array()}}, {{"files", {"../weights"}}},
+             {{"name", "COM\xC2\xB9"}}, {{"files", {"a/LPT\xC2\xB2.bin"}}},
+             {{"supported_platforms", nlohmann::json::array()}}, {{"url", nullptr}}}) {
+        for (bool preferred : {false, true}) {
+            auto candidate = entry;
+            if (preferred) candidate["preferred_source"] = patch;
+            else candidate.merge_patch(patch);
+            write_catalog("embedding-overlay.json", {{"schema_version", 1},
+                {"models", {{"embedding-test", {{"1", candidate}}}}}});
+            RequireThrows([&] { flm::catalog::load_model_catalog_overlay(path.string()); });
+        }
+    }
     std::filesystem::remove(path);
 }
 

@@ -132,11 +132,25 @@ void test_embedding_extension() {
     entry["backend_provider"] = "builtin";
     entry["default_context_length"] = 32;
     entry["max_prefill_len"] = 32;
-    WriteManifest(directory, "wrong-kind-catalog.json", catalog);
+    const auto generation = entry;
+    const auto original = ReadJson(directory / "embedding-catalog.json");
     manifest["catalog"] = "wrong-kind-catalog.json";
     const auto wrong = WriteManifest(directory, "wrong-kind-extension.json", manifest);
-    RequireContains(RequireThrows([&] { registry.load_extension(wrong, {}); }), "model_kind");
-    TEST_REQUIRE(!registry.has("test-embedding"));
+    for (const auto& [patch, message] :
+         std::vector<std::pair<nlohmann::json, std::string>>{
+             {generation, "model_kind"},
+             {{{"frontend_provider", "other-provider"}}, "frontend provider"}}) {
+        for (bool preferred : {false, true}) {
+            catalog = original;
+            auto& candidate = catalog["models"]["test-embedding"]["1"];
+            if (preferred) candidate["preferred_source"] = patch;
+            else candidate.merge_patch(patch);
+            WriteManifest(directory, "wrong-kind-catalog.json", catalog);
+            RequireContains(RequireThrows([&] { registry.load_extension(wrong, {}); }), message);
+            TEST_REQUIRE(!registry.has("test-embedding"));
+            TEST_REQUIRE(registry.catalog_overlays().empty());
+        }
+    }
     manifest = ReadJson(FLM_TEST_EMBEDDING_MANIFEST);
     std::filesystem::create_directories(directory / "incomplete");
     manifest["asset_root"] = "incomplete";

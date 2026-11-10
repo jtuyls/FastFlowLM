@@ -95,6 +95,7 @@ void test_embedding_handler() {
     TEST_REQUIRE(batch.at("data").size() == 2);
     TEST_REQUIRE(batch.at("data").at(0).at("embedding").at(0) == 2);
     TEST_REQUIRE(request("second", 42).contains("error"));
+    TEST_REQUIRE(request("second", json::array()).at("error").at("code") == 400);
     for (const auto& malformed : {json::object(), json{{"model", "second"}}}) {
         server.handle_embeddings(malformed, [](const json& response) {
             TEST_REQUIRE(response.at("error").at("code") == 400);
